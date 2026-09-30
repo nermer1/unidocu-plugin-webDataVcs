@@ -1,0 +1,6 @@
+/node_modules
+/target
+/out
+/.idea
+/dist/plugin.js
+customize.css

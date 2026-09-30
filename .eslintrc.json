@@ -1,0 +1,44 @@
+{
+    "plugins": ["import"],
+    "extends": ["plugin:prettier/recommended", "eslint:recommended"],
+    "parserOptions": {
+        "ecmaVersion": "latest",
+        "sourceType": "module"
+    },
+    "globals": {
+        "$customWebData": false,
+        "$u": false,
+        "$nst": false,
+        "staticProperties": false,
+        "$efi": false
+    },
+    "env": {
+        "browser": true,
+        "commonjs": true,
+        "es2021": true,
+        "jquery": true,
+        "note": true
+    },
+    "ignorePatterns": ["node_modules/", "$uPlugins.js"],
+    "rules": {
+        "no-console": "off",
+        "prettier/prettier": [
+            "error",
+            {
+                "endOfLine": "auto"
+            }
+        ],
+        "import/extensions": [
+            "error",
+            "ignorePackages",
+            {
+                "js": "never",
+                "jsx": "never",
+                "ts": "never",
+                "tsx": "never"
+            }
+        ],
+        "lines-between-class-members": ["error", "always", {"exceptAfterSingleLine": true}],
+        "no-explicit-any": 0
+    }
+}
