@@ -208,6 +208,40 @@ $plugin = {
         // 브랜치 rows(map) → [{op, SCOPE, WEB_DATA_ID, DATA}] 배열
         branchRows: (branch) => Object.keys(branch.rows || {}).map((k) => branch.rows[k]),
 
+        // 대상 dest에서 "브랜치가 건드린 SCOPE만" selectList 병렬 조회 → 브랜치 키에 해당하는 행만 반환
+        //   (전체 4441행 selectList 대신 건드린 스코프만 → 성능. __DEST+SCOPE 필터는 compareWebData가 쓰는 검증된 경로)
+        //   destRows [{SCOPE, WEB_DATA_ID, DATA}] — 대상에 존재하는 브랜치 키만
+        fetchDestRows: (branch, dest) => {
+            const rows = $plugin.merge.branchRows(branch);
+            const scopes = Array.from(new Set(rows.map((r) => String(r.SCOPE))));
+            const wantKeys = new Set(rows.map((r) => String(r.SCOPE) + '@' + String(r.WEB_DATA_ID)));
+            const fetchScope = (scope) =>
+                new Promise((resolve) => {
+                    let done = false;
+                    const finish = (arr) => {
+                        if (!done) {
+                            done = true;
+                            resolve(arr || []);
+                        }
+                    };
+                    try {
+                        $u.webData.selectList({__DEST: dest, SCOPE: scope}, (arr) => finish(arr));
+                    } catch (e) {
+                        finish([]);
+                    }
+                    setTimeout(() => finish([]), 20000); // hang 방지
+                });
+            return Promise.all(scopes.map(fetchScope)).then((lists) => {
+                const out = [];
+                lists.forEach((list) => {
+                    (list || []).forEach((r) => {
+                        if (wantKeys.has(String(r.SCOPE) + '@' + String(r.WEB_DATA_ID))) out.push({SCOPE: r.SCOPE, WEB_DATA_ID: r.WEB_DATA_ID, DATA: r.DATA});
+                    });
+                });
+                return out;
+            });
+        },
+
         // DATA 의미 비교: 객체 키 순서/공백 차이는 무시(배열 순서·값은 유지).
         //   SAP가 저장값을 재직렬화(키 순서/스페이싱 변경)해 돌려줘도 "변경" 오탐이 나지 않게.
         sameData: (a, b) => {
@@ -255,7 +289,7 @@ $plugin = {
     // ui : 브랜치 위젯 (FAB → 다이얼로그)
     // ────────────────────────────────────────────────────────────────────
     ui: {
-        // 브랜치 위젯 (통합 모달): 체크아웃/생성 + 대상 비교(같은 창) + 행 클릭 시 JSON diff + 파일 내보내기
+        // 브랜치 위젯 (git branch 스타일): 브랜치 리스트(● 작업중, 클릭=전환) + [운영 반영] 비교·반영.
         openBranchPanel: async () => {
             const u = $plugin.util;
             // 진입 시 dest 가드: 활성 브랜치가 다른 SAP dest 것이면 체크아웃 해제 + 경고
@@ -267,93 +301,116 @@ $plugin = {
             }
             const curDest = $plugin.store.currentDest();
             const branches = await $plugin.store.list();
-            const active = $plugin.store.getActive();
-            const activeOptions = [{value: '', text: '(없음 — dev만 저장)'}].concat(
-                branches.map((b) => ({value: b.name, text: b.name + ' [' + (b.dest || '?') + '] (' + Object.keys(b.rows || {}).length + '건)'}))
-            );
             const dests = (typeof staticProperties !== 'undefined' && staticProperties.destinationAliases) || [];
             const defDest = curDest || dests[0] || '';
             const destOptions = dests.map((d) => ({value: d, text: d}));
 
+            // diff 결과 그리드 (checkpoint 패턴: customWebDataMap 헤더 등록 → unidocu-grid div → renderUIComponents → getGrid)
+            const gridId = 'webdataVcs-diff-grid';
+            $u.webData.customWebDataMap[gridId + '@GRIDHEADER'] = {
+                OS_DATA: {IGN_GRID_PANEL: '1', SELECTED_OPTIONS: 'C'},
+                OT_DATA: [
+                    {FNAME: 'status', FNAME_TXT: '구분', WIDTH: '70', ALIGN: 'center'},
+                    {FNAME: 'SCOPE', FNAME_TXT: 'SCOPE', WIDTH: '150'},
+                    {FNAME: 'WEB_DATA_ID', FNAME_TXT: 'WEB_DATA_ID', WIDTH: '300'}
+                ]
+            };
+
             const $c = $(
-                '<div style="min-width:720px">' +
-                    '  <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">활성 브랜치 <span class="wv-active-holder"></span> <button class="unidocu-button wv-checkout">체크아웃</button> <button class="unidocu-button wv-delete">삭제</button>' +
-                    '    &nbsp; 새 브랜치 <span class="wv-new-holder"></span> <button class="unidocu-button wv-create">생성</button></div>' +
-                    '  <div style="color:#888;font-size:12px;margin-bottom:8px">현재 세션 dest: <b>' +
+                '<div style="min-width:700px">' +
+                    // 브랜치 헤더 + 더보기
+                    '<div style="display:flex;align-items:center;margin-bottom:4px">' +
+                    '  <b style="flex:1">브랜치 <span style="font-weight:normal;color:#888;font-size:12px">(● 작업 중 · 클릭 = 전환)</span></b>' +
+                    '  <button class="unidocu-button wv-toggle-more">⋯</button>' +
+                    '</div>' +
+                    // 브랜치 리스트 (git branch 스타일)
+                    '<div class="wv-branch-list" style="border:1px solid #e3e3e3;border-radius:4px;max-height:150px;overflow:auto;margin-bottom:6px"></div>' +
+                    // 새 브랜치 + 세션 dest
+                    '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">새 브랜치 <span class="wv-new-holder"></span> <button class="unidocu-button wv-create">생성</button>' +
+                    '  <span style="flex:1;text-align:right;color:#888;font-size:12px">세션 dest: <b>' +
                     u.escapeHtml(curDest || '?') +
-                    '</b> · 활성 브랜치가 있으면 저장 시 그 브랜치에도 함께 기록됩니다. (dev 저장은 평소대로)</div>' +
-                    '  <hr>' +
-                    '  <div style="display:flex;align-items:center;gap:6px;margin:6px 0">대상(master) <span class="wv-dest-holder"></span> <button class="unidocu-button wv-compare">비교</button> <span class="wv-info" style="color:#888;font-size:12px"></span></div>' +
-                    '  <div class="wv-result" style="max-height:300px;overflow:auto;border:1px solid #ddd;padding:4px">비교를 눌러 대상과의 차이를 확인하세요. 행을 클릭하면 JSON 비교(좌 master / 우 브랜치)가 열립니다. (SAP에 쓰지 않고 파일로만 내보냅니다)</div>' +
+                    '</b></span></div>' +
+                    // 더보기 패널 (숨김)
+                    '<div class="wv-more-panel" style="display:none;background:#f6f6f6;border:1px solid #e3e3e3;border-radius:4px;padding:8px;margin-bottom:6px">' +
+                    '  <button class="unidocu-button wv-history">배포 이력 / 복원</button> ' +
+                    '  <button class="unidocu-button wv-backup-export">백업 내보내기</button> ' +
+                    '  <span style="color:#aaa;font-size:12px">(준비 중)</span>' +
+                    '</div>' +
+                    '<hr>' +
+                    // 운영 반영
+                    '<div style="margin-bottom:4px"><b>운영 반영</b> &nbsp;&nbsp; 소스: ' +
+                    '  <label style="margin-right:8px"><input type="radio" name="wvSrc" class="wv-src" value="branch" checked> 브랜치</label>' +
+                    '  <label><input type="radio" name="wvSrc" class="wv-src" value="file"> 파일</label>' +
+                    '</div>' +
+                    '<div style="display:flex;align-items:center;gap:6px;margin:6px 0">대상 <span class="wv-dest-holder"></span> <button class="unidocu-button wv-compare">비교</button> <span class="wv-info" style="color:#888;font-size:12px"></span></div>' +
+                    '<div class="wv-result" style="color:#888;font-size:12px;margin:4px 0">작업 브랜치 선택 후 비교를 누르세요. (행 클릭 → JSON 비교)</div>' +
+                    '<div id="' +
+                    gridId +
+                    '" class="unidocu-grid" data-sub-group="' +
+                    gridId +
+                    '" data-sub-id="GRIDHEADER" style="height:260px"></div>' +
                     '</div>'
             );
 
-            // 활성 브랜치: Uni_Combo / 새 브랜치: Uni_InputText / 대상: Uni_Combo
-            const $active = $u.createSingleInput({name: 'wvActiveBranch', type: 'Uni_Combo', options: activeOptions});
-            $c.find('.wv-active-holder').append($active.$el);
-            $active.setValue(active);
-
+            // 새 브랜치: Uni_InputText / 대상: Uni_Combo
             const $newInput = $u.createSingleInput({name: 'wvNewBranch', type: 'Uni_InputText'});
             $c.find('.wv-new-holder').append($newInput.$el);
 
-            const $dest = $u.createSingleInput({name: 'wvDest', type: 'Uni_Combo', options: destOptions});
+            const $dest = $u.createSingleInput({name: 'wvDest', type: 'Uni_Combo', options: destOptions, useEmptyOption: true});
             $c.find('.wv-dest-holder').append($dest.$el);
             if (defDest) $dest.setValue(defDest);
 
+            // 브랜치 리스트 렌더 (● = 활성/HEAD, 클릭=체크아웃, 행별 삭제)
+            const renderBranchList = () => {
+                const act = $plugin.store.getActive();
+                const esc = u.escapeHtml;
+                const row = (name, dest, count, on, deletable) =>
+                    '<div class="wv-brow" data-name="' +
+                    esc(name) +
+                    '" style="display:flex;align-items:center;gap:8px;padding:4px 6px;cursor:pointer;' +
+                    (on ? 'background:#eaf4ff;' : '') +
+                    '">' +
+                    '<span style="width:14px;text-align:center">' +
+                    (on ? '●' : '○') +
+                    '</span>' +
+                    '<span style="flex:1">' +
+                    (name
+                        ? '<b>' + esc(name) + '</b> <span style="color:#888">[' + esc(dest || '?') + '] ' + count + '건</span>'
+                        : '<span style="color:#888">(작업 안 함 — dev만 저장)</span>') +
+                    '</span>' +
+                    (deletable ? '<button class="unidocu-button wv-brow-del" data-name="' + esc(name) + '">삭제</button>' : '') +
+                    '</div>';
+                const list = branches.map((b) => row(b.name, b.dest, Object.keys(b.rows || {}).length, b.name === act, true)).join('');
+                $c.find('.wv-branch-list').html(list + row('', '', 0, !act, false));
+            };
+
             let compareBranch = null; // 비교 중인 브랜치 객체 (JSON diff 편집 저장용)
             let destMap = {}; // key -> master DATA(string)
-            let current = []; // diff 행
+            let current = []; // diff 행 (op/DATA 포함 — export·rowDiff용)
+            let gridObj = null; // diff 결과 그리드
 
             const render = (rows) => {
                 current = rows;
-                if (!rows.length) {
-                    $c.find('.wv-result').html('<div style="padding:8px">차이 없음</div>');
-                    return;
-                }
-                const body = rows
-                    .map(
-                        (r, i) =>
-                            '<tr class="wv-tr" data-idx="' +
-                            i +
-                            '" style="cursor:pointer">' +
-                            '<td style="text-align:center"><input type="checkbox" class="wv-row" data-idx="' +
-                            i +
-                            '" checked></td>' +
-                            '<td style="text-align:center">' +
-                            u.escapeHtml(r.status) +
-                            '</td>' +
-                            '<td>' +
-                            u.escapeHtml(r.SCOPE) +
-                            '</td>' +
-                            '<td>' +
-                            u.escapeHtml(r.WEB_DATA_ID) +
-                            '</td></tr>'
-                    )
-                    .join('');
-                $c.find('.wv-result').html(
-                    '<table style="width:100%;border-collapse:collapse">' +
-                        '<thead><tr style="background:#f5f5f5">' +
-                        '<th style="width:36px"><input type="checkbox" class="wv-all" checked></th><th style="width:64px">구분</th><th style="width:150px">SCOPE</th><th>WEB_DATA_ID</th>' +
-                        '</tr></thead><tbody>' +
-                        body +
-                        '</tbody></table>'
-                );
+                $c.find('.wv-result').text(rows.length ? rows.length + '건 차이 (행 클릭 → JSON 비교)' : '차이 없음');
+                // 그리드엔 표시 컬럼만 (SELECTED:'1' → 기본 체크). op/DATA는 current에 보관.
+                if (gridObj) gridObj.setJSONData(rows.map((r) => ({SELECTED: '1', status: r.status, SCOPE: r.SCOPE, WEB_DATA_ID: r.WEB_DATA_ID})));
             };
 
             const doCompare = async () => {
-                const bname = $active.getValue();
-                if (!bname) return unidocuAlert('비교할 브랜치를 선택하세요.');
+                const bname = $plugin.store.getActive();
+                if (!bname) return unidocuAlert('작업 브랜치를 먼저 선택하세요 (리스트에서 클릭).');
                 compareBranch = await $plugin.store.get(bname);
                 if (!compareBranch) return unidocuAlert('브랜치 없음: ' + bname);
                 const dest = $dest.getValue();
-                $u.webData.selectList({__DEST: dest}, (destRows) => {
-                    destMap = {};
-                    (destRows || []).forEach((r) => {
-                        destMap[String(r.SCOPE) + '@' + String(r.WEB_DATA_ID)] = r.DATA;
-                    });
-                    render($plugin.merge.diff(compareBranch, destRows || []));
-                    $c.find('.wv-info').text(bname + ' ↔ ' + (dest || 'dev') + ' : ' + current.length + '건 차이');
+                $c.find('.wv-info').text('비교 중…');
+                // 전체 selectList 대신 "브랜치 키만" 병렬 selectOne → 필요한 행만 (성능)
+                const destRows = await $plugin.merge.fetchDestRows(compareBranch, dest);
+                destMap = {};
+                destRows.forEach((r) => {
+                    destMap[String(r.SCOPE) + '@' + String(r.WEB_DATA_ID)] = r.DATA;
                 });
+                render($plugin.merge.diff(compareBranch, destRows));
+                $c.find('.wv-info').text(bname + ' ↔ ' + (dest || 'dev') + ' : ' + current.length + '건 차이');
             };
 
             // 행 클릭 → JSON diff (좌 master / 우 브랜치, 우측 편집=최종본 B → 브랜치에 저장)
@@ -385,63 +442,92 @@ $plugin = {
             };
 
             const doExport = () => {
-                const idxs = $c
-                    .find('.wv-row:checked')
-                    .map(function () {
-                        return parseInt($(this).data('idx'), 10);
-                    })
-                    .get();
-                if (!idxs.length) return unidocuAlert('선택된 항목이 없습니다.');
-                const rows = idxs.map((i) => current[i]).map((r) => ({SCOPE: r.SCOPE, WEB_DATA_ID: r.WEB_DATA_ID, op: r.op, DATA: r.DATA}));
-                const bname = $active.getValue() || 'branch';
+                const selected = gridObj ? gridObj.getSELECTEDJSONData() : [];
+                if (!selected.length) return unidocuAlert('선택된 항목이 없습니다.');
+                // 선택된 그리드 행(표시컬럼만) → 키로 current에서 op/DATA 복원
+                const byKey = {};
+                current.forEach((r) => (byKey[String(r.SCOPE) + '@' + String(r.WEB_DATA_ID)] = r));
+                const rows = selected
+                    .map((s) => byKey[String(s.SCOPE) + '@' + String(s.WEB_DATA_ID)])
+                    .filter(Boolean)
+                    .map((r) => ({SCOPE: r.SCOPE, WEB_DATA_ID: r.WEB_DATA_ID, op: r.op, DATA: r.DATA}));
+                const bname = $plugin.store.getActive() || 'branch';
                 const payload = {_type: 'webdataVcs-merge', branch: bname, dest: $dest.getValue(), exportedAt: u.now(), rows: rows};
                 u.downloadJSON('webdataVcs_' + bname + '_' + u.ts() + '.json', payload);
             };
 
+            // 운영에 직접 반영(push) — 아직 미구현 스텁 (배포 스냅샷+부분반영 예정)
+            const doDeploy = () => {
+                unidocuAlert(
+                    '운영에 직접 반영(push)은 준비 중입니다.\n현재는 [파일로 내보내기]로 release 파일을 받아 적용하세요.\n(반영 시 운영 자동백업·부분반영 예정)'
+                );
+            };
+
             u.modal({
-                title: 'webdata 브랜치 / 병합',
-                width: 780,
+                title: 'webdata 브랜치',
+                width: 760,
                 $content: $c,
-                buttons: [{text: '선택 항목 파일로 내보내기', cls: 'unidocu-button blue', onClick: doExport}]
+                buttons: [
+                    {text: '파일로 내보내기', cls: 'unidocu-button', onClick: doExport},
+                    {text: '운영에 반영', cls: 'unidocu-button blue', onClick: doDeploy}
+                ]
             });
 
-            $c.on('click', '.wv-checkout', () => {
-                const n = $active.getValue();
-                $plugin.store.setActive(n);
-                unidocuAlert('체크아웃(활성): ' + (n || '(없음)'));
+            // 모달이 DOM에 올라간 뒤 그리드 렌더 (헤더는 위에서 customWebDataMap 등록됨)
+            $u.renderUIComponents($c);
+            renderBranchList();
+            gridObj = $u.gridWrapper.getGrid(gridId);
+            if (gridObj) {
+                gridObj.setJSONData([]);
+                gridObj.onCellClick((columnKey, rowIndex) => {
+                    if (columnKey === 'SELECTED') return; // 체크박스 칸은 선택용
+                    const key = String(gridObj.$V('SCOPE', rowIndex)) + '@' + String(gridObj.$V('WEB_DATA_ID', rowIndex));
+                    const idx = current.findIndex((r) => String(r.SCOPE) + '@' + String(r.WEB_DATA_ID) === key);
+                    if (idx >= 0) openRowDiff(idx);
+                });
+            }
+
+            // 더보기 토글 + 스텁
+            $c.on('click', '.wv-toggle-more', () => $c.find('.wv-more-panel').toggle());
+            $c.on('click', '.wv-history', () => unidocuAlert('배포 이력 / 복원 — 준비 중'));
+            $c.on('click', '.wv-backup-export', () => unidocuAlert('백업 내보내기 — 준비 중'));
+            // 운영 반영 소스: 파일은 아직 미구현 → 브랜치로 되돌림
+            $c.on('change', '.wv-src', function () {
+                if ($(this).val() === 'file') {
+                    unidocuAlert('파일로 반영(import)은 준비 중입니다. 지금은 브랜치 기준만 됩니다.');
+                    $c.find('.wv-src[value="branch"]').prop('checked', true);
+                }
             });
-            $c.on('click', '.wv-delete', () => {
-                const n = $active.getValue();
-                if (!n) return unidocuAlert('삭제할 브랜치를 선택하세요.');
+
+            // 브랜치 리스트: 행 클릭 = 체크아웃(전환), 행별 삭제
+            $c.on('click', '.wv-brow-del', function (e) {
+                e.stopPropagation(); // 행 클릭(체크아웃)으로 전파 방지
+                const n = String($(this).attr('data-name') || '');
+                if (!n) return;
                 unidocuConfirm('브랜치 "' + n + '" 를 삭제할까요? (되돌릴 수 없음)', async () => {
                     await $plugin.store.remove(n);
                     if ($plugin.store.getActive() === n) $plugin.store.setActive(''); // 활성이면 해제
-                    const idx = activeOptions.findIndex((o) => o.value === n);
-                    if (idx >= 0) activeOptions.splice(idx, 1);
-                    $active.setOptions(activeOptions, '');
-                    $active.setValue('');
-                    unidocuAlert('삭제됨: ' + n);
+                    const idx = branches.findIndex((b) => b.name === n);
+                    if (idx >= 0) branches.splice(idx, 1);
+                    renderBranchList();
                 });
+            });
+            $c.on('click', '.wv-brow', function () {
+                const n = String($(this).attr('data-name') || '');
+                $plugin.store.setActive(n); // '' 이면 작업 안 함
+                renderBranchList();
             });
             $c.on('click', '.wv-create', async () => {
                 const n = String($newInput.getValue() || '').trim();
                 if (!n) return unidocuAlert('이름을 입력하세요.');
-                await $plugin.store.create(n);
+                if (branches.some((b) => b.name === n)) return unidocuAlert('이미 있는 브랜치명입니다.');
+                const b = await $plugin.store.create(n);
                 $plugin.store.setActive(n);
-                if (!activeOptions.some((o) => o.value === n)) activeOptions.push({value: n, text: n + ' (0건)'});
-                $active.setOptions(activeOptions, n);
-                $active.setValue(n);
+                branches.push(b);
                 $newInput.setValue('');
-                unidocuAlert('브랜치 생성 + 체크아웃: ' + n);
+                renderBranchList();
             });
             $c.on('click', '.wv-compare', doCompare);
-            $c.on('change', '.wv-all', function () {
-                $c.find('.wv-row').prop('checked', $(this).prop('checked'));
-            });
-            $c.on('click', '.wv-tr', function (e) {
-                if ($(e.target).is('.wv-row')) return; // 체크박스 클릭은 diff 안 염
-                openRowDiff(parseInt($(this).data('idx'), 10));
-            });
         }
     },
 
