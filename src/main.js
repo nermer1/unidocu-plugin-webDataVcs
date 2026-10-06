@@ -308,7 +308,7 @@ $plugin = {
             // diff 결과 그리드 (checkpoint 패턴: customWebDataMap 헤더 등록 → unidocu-grid div → renderUIComponents → getGrid)
             const gridId = 'webdataVcs-diff-grid';
             $u.webData.customWebDataMap[gridId + '@GRIDHEADER'] = {
-                OS_DATA: {IGN_GRID_PANEL: '1', SELECTED_OPTIONS: 'C'},
+                OS_DATA: {IGN_GRID_PANEL: '1'}, // 체크바 없음 — 리뷰 전용 목록 (선택 개념 제거)
                 OT_DATA: [
                     {FNAME: 'status', FNAME_TXT: '구분', WIDTH: '70', ALIGN: 'center'},
                     {FNAME: 'SCOPE', FNAME_TXT: 'SCOPE', WIDTH: '150'},
@@ -320,7 +320,7 @@ $plugin = {
                 '<div style="min-width:700px">' +
                     // 브랜치 헤더 + 더보기
                     '<div style="display:flex;align-items:center;margin-bottom:4px">' +
-                    '  <b style="flex:1">브랜치 <span style="font-weight:normal;color:#888;font-size:12px">(● 작업 중 · 클릭 = 전환)</span></b>' +
+                    '  <b style="flex:1">브랜치 <span class="wv-head" style="font-weight:normal;font-size:12px"></span></b>' +
                     '  <button class="unidocu-button wv-toggle-more">⋯</button>' +
                     '</div>' +
                     // 브랜치 리스트 (git branch 스타일)
@@ -343,7 +343,7 @@ $plugin = {
                     '  <label><input type="radio" name="wvSrc" class="wv-src" value="file"> 파일</label>' +
                     '</div>' +
                     '<div style="display:flex;align-items:center;gap:6px;margin:6px 0">대상 <span class="wv-dest-holder"></span> <button class="unidocu-button wv-compare">비교</button> <span class="wv-info" style="color:#888;font-size:12px"></span></div>' +
-                    '<div class="wv-result" style="color:#888;font-size:12px;margin:4px 0">작업 브랜치 선택 후 비교를 누르세요. (행 클릭 → JSON 비교)</div>' +
+                    '<div class="wv-result" style="color:#888;font-size:12px;margin:4px 0">작업 브랜치 체크아웃 후 [비교]를 누르세요. (행 클릭 → 변경 내용 보기)</div>' +
                     '<div id="' +
                     gridId +
                     '" class="unidocu-grid" data-sub-group="' +
@@ -360,28 +360,85 @@ $plugin = {
             $c.find('.wv-dest-holder').append($dest.$el);
             if (defDest) $dest.setValue(defDest);
 
-            // 브랜치 리스트 렌더 (● = 활성/HEAD, 클릭=체크아웃, 행별 삭제)
+            // 전환/삭제 피드백용 경량 토스트 (코어에 toast 없음 → 직접). "됐다"는 명시 신호.
+            let _toastTimer = null;
+            const showToast = (msg) => {
+                let $t = $('#wv-toast');
+                if (!$t.length) {
+                    $t = $('<div id="wv-toast"></div>')
+                        .css({
+                            position: 'fixed',
+                            left: '50%',
+                            bottom: '48px',
+                            transform: 'translateX(-50%)',
+                            background: 'rgba(33,37,41,.92)',
+                            color: '#fff',
+                            padding: '8px 16px',
+                            borderRadius: '6px',
+                            fontSize: '13px',
+                            zIndex: 2147483647,
+                            pointerEvents: 'none',
+                            boxShadow: '0 4px 14px rgba(0,0,0,.25)',
+                            transition: 'opacity .2s'
+                        })
+                        .appendTo('body');
+                }
+                $t.text(msg).css('opacity', '1');
+                clearTimeout(_toastTimer);
+                _toastTimer = setTimeout(() => {
+                    $t.css('opacity', '0');
+                    setTimeout(() => $t.remove(), 250);
+                }, 1600);
+            };
+
+            // 브랜치 리스트 렌더 (● = 현재/HEAD, [체크아웃] 버튼으로 명시적 전환, × 삭제. 행 전체 클릭은 액션 없음)
             const renderBranchList = () => {
                 const act = $plugin.store.getActive();
                 const esc = u.escapeHtml;
-                const row = (name, dest, count, on, deletable) =>
-                    '<div class="wv-brow" data-name="' +
-                    esc(name) +
-                    '" style="display:flex;align-items:center;gap:8px;padding:4px 6px;cursor:pointer;' +
+                // 상단 "현재 브랜치" 표시 (git status bar 느낌 — 전환하면 여기가 바로 바뀜)
+                $c.find('.wv-head').html(act ? '현재: <b style="color:#1971c2">● ' + esc(act) + '</b>' : '현재: <span style="color:#888">작업 안 함</span>');
+                const nameRow = (name, dest, count, date, on) =>
+                    '<div class="wv-brow" style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #f0f0f0;' +
                     (on ? 'background:#eaf4ff;' : '') +
                     '">' +
-                    '<span style="width:14px;text-align:center">' +
+                    '<span style="width:12px;text-align:center;color:' +
+                    (on ? '#1971c2' : '#bbb') +
+                    '">' +
                     (on ? '●' : '○') +
                     '</span>' +
-                    '<span style="flex:1">' +
-                    (name
-                        ? '<b>' + esc(name) + '</b> <span style="color:#888">[' + esc(dest || '?') + '] ' + count + '건</span>'
-                        : '<span style="color:#888">(작업 안 함 — dev만 저장)</span>') +
-                    '</span>' +
-                    (deletable ? '<button class="unidocu-button wv-brow-del" data-name="' + esc(name) + '">삭제</button>' : '') +
+                    '<span style="flex:1;min-width:0"><b>' +
+                    esc(name) +
+                    '</b> ' +
+                    '<span style="color:#888;font-size:12px">[' +
+                    esc(dest || '?') +
+                    '] · ' +
+                    count +
+                    '건 · ' +
+                    esc(u.shortDate(date)) +
+                    '</span></span>' +
+                    (on
+                        ? '<span style="color:#1971c2;font-size:12px;font-weight:bold;padding:0 6px">현재</span>'
+                        : '<button class="unidocu-button wv-checkout" data-name="' + esc(name) + '">체크아웃</button>') +
+                    '<button class="unidocu-button wv-brow-del" data-name="' +
+                    esc(name) +
+                    '" title="삭제" style="color:#c92a2a">×</button>' +
                     '</div>';
-                const list = branches.map((b) => row(b.name, b.dest, Object.keys(b.rows || {}).length, b.name === act, true)).join('');
-                $c.find('.wv-branch-list').html(list + row('', '', 0, !act, false));
+                const noneRow = (on) =>
+                    '<div class="wv-brow" style="display:flex;align-items:center;gap:8px;padding:5px 8px;' +
+                    (on ? 'background:#eaf4ff;' : '') +
+                    '">' +
+                    '<span style="width:12px;text-align:center;color:' +
+                    (on ? '#1971c2' : '#bbb') +
+                    '">' +
+                    (on ? '●' : '○') +
+                    '</span>' +
+                    '<span style="flex:1;color:#888">작업 안 함 — dev만 저장</span>' +
+                    (on
+                        ? '<span style="color:#1971c2;font-size:12px;font-weight:bold;padding:0 6px">현재</span>'
+                        : '<button class="unidocu-button wv-checkout" data-name="">이걸로</button>') +
+                    '</div>';
+                const list = branches.map((b) => nameRow(b.name, b.dest, Object.keys(b.rows || {}).length, b.updatedAt, b.name === act)).join('');
+                $c.find('.wv-branch-list').html(list + noneRow(!act));
             };
 
             let compareBranch = null; // 비교 중인 브랜치 객체 (JSON diff 편집 저장용)
@@ -391,14 +448,14 @@ $plugin = {
 
             const render = (rows) => {
                 current = rows;
-                $c.find('.wv-result').text(rows.length ? rows.length + '건 차이 (행 클릭 → JSON 비교)' : '차이 없음');
-                // 그리드엔 표시 컬럼만 (SELECTED:'1' → 기본 체크). op/DATA는 current에 보관.
-                if (gridObj) gridObj.setJSONData(rows.map((r) => ({SELECTED: '1', status: r.status, SCOPE: r.SCOPE, WEB_DATA_ID: r.WEB_DATA_ID})));
+                $c.find('.wv-result').text(rows.length ? rows.length + '건 차이 (행 클릭 → 변경 내용 보기)' : '차이 없음');
+                // 그리드엔 표시 컬럼만. op/DATA는 current에 보관. (체크바 없음 → 리뷰 목록)
+                if (gridObj) gridObj.setJSONData(rows.map((r) => ({status: r.status, SCOPE: r.SCOPE, WEB_DATA_ID: r.WEB_DATA_ID})));
             };
 
             const doCompare = async () => {
                 const bname = $plugin.store.getActive();
-                if (!bname) return unidocuAlert('작업 브랜치를 먼저 선택하세요 (리스트에서 클릭).');
+                if (!bname) return unidocuAlert('작업 브랜치를 먼저 체크아웃하세요 (리스트에서 [체크아웃]).');
                 compareBranch = await $plugin.store.get(bname);
                 if (!compareBranch) return unidocuAlert('브랜치 없음: ' + bname);
                 const dest = $dest.getValue();
@@ -413,7 +470,8 @@ $plugin = {
                 $c.find('.wv-info').text(bname + ' ↔ ' + (dest || 'dev') + ' : ' + current.length + '건 차이');
             };
 
-            // 행 클릭 → JSON diff (좌 master / 우 브랜치, 우측 편집=최종본 B → 브랜치에 저장)
+            // 행 클릭 → JSON diff 리뷰 (좌 운영 / 우 브랜치, read-only — 빨강=운영·초록=브랜치)
+            //   코어 jsonDiffDialog는 save left/right 버튼이 하드코딩이라, 저장 콜백 no-op + 버튼 숨김으로 보기전용화.
             const openRowDiff = (i) => {
                 const r = current[i];
                 if (!r) return;
@@ -426,31 +484,24 @@ $plugin = {
                     }
                 };
                 $u.dialog.jsonDiffDialog.open(
-                    parse(destMap[key]), // 좌 = master (A)
-                    parse(r.DATA), // 우 = 브랜치 (C)
-                    () => {}, // save left: master 안 고침 (no-op)
-                    (edited) => {
-                        // save right: 편집본을 브랜치 최종값(B)으로 저장
-                        const dataStr = JSON.stringify(edited);
-                        r.DATA = dataStr;
-                        if (compareBranch && compareBranch.rows && compareBranch.rows[key]) {
-                            compareBranch.rows[key].DATA = dataStr;
-                            $plugin.store.save(compareBranch);
-                        }
-                    }
+                    parse(destMap[key]), // 좌 = 운영(master)
+                    parse(r.DATA), // 우 = 브랜치
+                    () => {}, // save left: no-op
+                    () => {} // save right: no-op (편집 저장 안 함 — 리뷰 전용)
                 );
+                // read-only: 코어 다이얼로그의 save 버튼 숨김 (편집/저장 개념 제거)
+                try {
+                    const $dlg = $('#containerLeft').closest('.ui-dialog');
+                    $dlg.find('.ui-dialog-buttonpane button').each(function () {
+                        if (/save/i.test($(this).text())) $(this).hide();
+                    });
+                } catch (e) {}
             };
 
+            // 내보내기 = 비교된 변경 내역 전체 (브랜치 통째 배포 모델 — 선택 개념 없음)
             const doExport = () => {
-                const selected = gridObj ? gridObj.getSELECTEDJSONData() : [];
-                if (!selected.length) return unidocuAlert('선택된 항목이 없습니다.');
-                // 선택된 그리드 행(표시컬럼만) → 키로 current에서 op/DATA 복원
-                const byKey = {};
-                current.forEach((r) => (byKey[String(r.SCOPE) + '@' + String(r.WEB_DATA_ID)] = r));
-                const rows = selected
-                    .map((s) => byKey[String(s.SCOPE) + '@' + String(s.WEB_DATA_ID)])
-                    .filter(Boolean)
-                    .map((r) => ({SCOPE: r.SCOPE, WEB_DATA_ID: r.WEB_DATA_ID, op: r.op, DATA: r.DATA}));
+                if (!current.length) return unidocuAlert('내보낼 변경 내역이 없습니다. 먼저 [비교]를 실행하세요.');
+                const rows = current.map((r) => ({SCOPE: r.SCOPE, WEB_DATA_ID: r.WEB_DATA_ID, op: r.op, DATA: r.DATA}));
                 const bname = $plugin.store.getActive() || 'branch';
                 const payload = {_type: 'webdataVcs-merge', branch: bname, dest: $dest.getValue(), exportedAt: u.now(), rows: rows};
                 u.downloadJSON('webdataVcs_' + bname + '_' + u.ts() + '.json', payload);
@@ -478,9 +529,11 @@ $plugin = {
             renderBranchList();
             gridObj = $u.gridWrapper.getGrid(gridId);
             if (gridObj) {
+                try {
+                    gridObj._rg.setCheckBar({visible: false}); // 체크바 확실히 제거 (리뷰 전용 — SELECTED_OPTIONS 제거만으론 안 사라질 수 있음)
+                } catch (e) {}
                 gridObj.setJSONData([]);
                 gridObj.onCellClick((columnKey, rowIndex) => {
-                    if (columnKey === 'SELECTED') return; // 체크박스 칸은 선택용
                     const key = String(gridObj.$V('SCOPE', rowIndex)) + '@' + String(gridObj.$V('WEB_DATA_ID', rowIndex));
                     const idx = current.findIndex((r) => String(r.SCOPE) + '@' + String(r.WEB_DATA_ID) === key);
                     if (idx >= 0) openRowDiff(idx);
@@ -499,9 +552,16 @@ $plugin = {
                 }
             });
 
-            // 브랜치 리스트: 행 클릭 = 체크아웃(전환), 행별 삭제
+            // 브랜치 리스트: [체크아웃] 버튼 = 명시적 전환, × = 삭제 (행 전체 클릭은 액션 없음)
+            $c.on('click', '.wv-checkout', function (e) {
+                e.stopPropagation();
+                const n = String($(this).attr('data-name') || '');
+                $plugin.store.setActive(n); // '' 이면 작업 안 함
+                renderBranchList();
+                showToast(n ? '“' + n + '” 체크아웃됨' : '작업 안 함으로 전환됨');
+            });
             $c.on('click', '.wv-brow-del', function (e) {
-                e.stopPropagation(); // 행 클릭(체크아웃)으로 전파 방지
+                e.stopPropagation();
                 const n = String($(this).attr('data-name') || '');
                 if (!n) return;
                 unidocuConfirm('브랜치 "' + n + '" 를 삭제할까요? (되돌릴 수 없음)', async () => {
@@ -510,12 +570,8 @@ $plugin = {
                     const idx = branches.findIndex((b) => b.name === n);
                     if (idx >= 0) branches.splice(idx, 1);
                     renderBranchList();
+                    showToast('“' + n + '” 삭제됨');
                 });
-            });
-            $c.on('click', '.wv-brow', function () {
-                const n = String($(this).attr('data-name') || '');
-                $plugin.store.setActive(n); // '' 이면 작업 안 함
-                renderBranchList();
             });
             $c.on('click', '.wv-create', async () => {
                 const n = String($newInput.getValue() || '').trim();
@@ -526,6 +582,7 @@ $plugin = {
                 branches.push(b);
                 $newInput.setValue('');
                 renderBranchList();
+                showToast('“' + n + '” 생성 · 체크아웃됨');
             });
             $c.on('click', '.wv-compare', doCompare);
         }
@@ -539,6 +596,14 @@ $plugin = {
             const d = new Date();
             const p = (n) => String(n).padStart(2, '0');
             return '' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '_' + p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds());
+        },
+        // 리스트 표시용 짧은 날짜 (MM/DD HH:mm). 값 없거나 파싱 실패하면 ''.
+        shortDate: (iso) => {
+            if (!iso) return '';
+            const d = new Date(iso);
+            if (isNaN(d.getTime())) return '';
+            const p = (n) => String(n).padStart(2, '0');
+            return p(d.getMonth() + 1) + '/' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
         },
         escapeHtml: (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'})[c]),
         // JSON 객체를 파일로 다운로드 (브라우저)
