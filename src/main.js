@@ -839,14 +839,16 @@ $plugin = {
                 const wasJson = [it.mine, it.theirs, it.base].some((s) => merge3.parse(s).json);
                 if (wasJson && !merge3.parse(text).json) return unidocuAlert('JSON 형식이 올바르지 않습니다.');
                 const result = merge3.compact(text);
-                // 결과가 무엇을 뜻하는지 알려주고 확인 (병합했다고 착각하고 대상 유지/미선택으로 끝나는 것 방지)
-                const confirmThen = (msg, next) => (msg ? unidocuConfirm(msg, next) : next());
-                const untouched = !it.resolution && merge3.same(result, merge3.compact(startValue)) && !merge3.same(result, it.mine);
-                confirmThen(untouched ? '충돌 지점을 아직 고르지 않았습니다. (고치기 전 값 그대로)\n이대로 적용할까요?' : '', () =>
-                    confirmThen(merge3.same(result, it.theirs) ? '결과가 대상과 같습니다. 이 행은 반영되지 않고 대상 값이 유지됩니다.\n적용할까요?' : '', () =>
-                        doApply(result)
-                    )
-                );
+                // 충돌 지점이 하나라도 base 그대로면 적용 불가 (IntelliJ와 동일 — 고르거나 [취소]만 가능)
+                const left = merge3.unresolved(it.base, result, it.j.paths);
+                if (left.length)
+                    return unidocuAlert(
+                        '아직 고르지 않은 충돌이 있습니다: ' + left.join(', ') + '\n화살표로 내 값 / 대상 중 고르거나 직접 수정하세요. (그만두려면 [취소])'
+                    );
+                // 결과가 대상과 같으면 반영되지 않는다는 걸 알리고 확인
+                if (merge3.same(result, it.theirs))
+                    return unidocuConfirm('결과가 대상과 같습니다. 이 행은 반영되지 않고 대상 값이 유지됩니다.\n적용할까요?', () => doApply(result));
+                doApply(result);
             };
             const $dlg = $plugin.ui.modal({
                 title: '병합 — ' + it.key,
@@ -1113,6 +1115,7 @@ $plugin = {
                 '.wv-b-success{background:#e6f7ea;color:#2b8a3e}.wv-b-del{background:#fff0e6;color:#d9480f}.wv-b-muted{background:#f1f3f5;color:#868e96}',
                 '.wv-merge .CodeMirror{font-family:Consolas,Monaco,monospace;font-size:12px}',
                 '.wv-merge .CodeMirror-merge{border:1px solid #ddd}',
+                '.wv-merge .CodeMirror-merge-scrolllock-wrap{display:none}',
                 '.wv-cmp-bar{display:flex;align-items:center;gap:4px;margin-bottom:6px}.wv-cmp-info{flex:1;margin-left:8px;font-size:12px}',
                 '.wv-cmp-view.wv-on{background:#1971c2;color:#fff;border-color:#1971c2}',
                 '.wv-dry{background:#fff9db;color:#8a6d00;border:1px solid #ffe066;border-radius:4px;padding:6px 10px;margin-bottom:8px;font-size:12px}',

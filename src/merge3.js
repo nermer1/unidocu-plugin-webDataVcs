@@ -62,7 +62,7 @@ const mergeObj = (b, m, t, path, conflicts) => {
         else if (eqVal(bv, mv)) v = tv;
         else if (isObj(mv) && isObj(tv) && (bv === undefined || isObj(bv))) v = mergeObj(bv || {}, mv, tv, path.concat(k), conflicts);
         else {
-            conflicts.push(path.concat(k).join('.'));
+            conflicts.push(path.concat(k));
             v = bv;
         }
         if (v !== undefined) out[k] = v;
@@ -82,7 +82,14 @@ const judge = (base, mine, theirs) => {
     const M = parse(mine);
     const T = parse(theirs);
     const kindOf = (res) => (res === null ? 'delete' : T.absent ? 'add' : 'modify');
-    const done = (status, result, conflicts) => ({status, kind: kindOf(result), result, conflicts: conflicts || []});
+    // conflicts: 표시용 문자열('a.b'), paths: 판정용 경로 배열 ([] = 행 전체)
+    const done = (status, result, paths) => ({
+        status,
+        kind: kindOf(result),
+        result,
+        conflicts: (paths || []).map((p) => (p.length ? p.join('.') : '*')),
+        paths: paths || []
+    });
 
     if (eqParsed(M, T)) return done('same', mine === undefined ? null : mine);
     if (eqParsed(B, T)) return done('clean', M.absent ? null : mine);
@@ -100,7 +107,7 @@ const judge = (base, mine, theirs) => {
         const merged = JSON.stringify(mergeObj({}, M.v, T.v, [], conflicts));
         return done(conflicts.length ? 'conflict' : 'auto', merged, conflicts);
     }
-    return done('conflict', B.absent ? null : base, ['*']);
+    return done('conflict', B.absent ? null : base, [[]]);
 };
 
 // 사람이 읽기 좋은 들여쓰기 (병합 화면용). 비JSON은 그대로.
@@ -115,6 +122,19 @@ const prettySorted = (s) => {
     if (p.absent) return '';
     return p.json ? JSON.stringify(canon(p.v), null, 2) : p.v;
 };
+// 경로 값 조회 (없으면 undefined)
+const getAt = (v, path) => path.reduce((o, k) => (o !== null && typeof o === 'object' && hasOwn(o, k) ? o[k] : undefined), v);
+
+// 아직 고르지 않은 충돌 경로 — 결과가 그 지점에서 base 값 그대로면 미해결 (IntelliJ처럼 모두 골라야 적용)
+const unresolved = (base, result, paths) => {
+    const B = parse(base);
+    const R = parse(result);
+    if ((paths || []).some((p) => !p.length)) return eqParsed(B, R) ? ['*'] : [];
+    if (R.absent || !R.json || (!B.absent && !B.json)) return [];
+    const bv = B.absent ? {} : B.v; // 양쪽 신규(base 없음)의 키 충돌은 "키 없음"이 시작값
+    return (paths || []).filter((p) => eqVal(getAt(bv, p), getAt(R.v, p))).map((p) => p.join('.'));
+};
+
 // 화면 편집 결과 → 저장 원문 (JSON이면 압축, 비JSON은 그대로). 빈 문자열 = 삭제.
 const compact = (s) => {
     const p = parse(s);
@@ -122,4 +142,4 @@ const compact = (s) => {
     return p.json ? JSON.stringify(p.v) : p.v;
 };
 
-export default {same, judge, pretty, prettySorted, compact, parse};
+export default {same, judge, unresolved, pretty, prettySorted, compact, parse};
