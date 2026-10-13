@@ -265,9 +265,8 @@ $plugin = {
             return after === null ? 'delete' : it.theirs === null ? 'add' : 'modify';
         },
 
-        // 반영: ① 대상이 판정 이후 바뀌었는지 재확인 ② 반영 전 값 백업(이력) ③ 쓰기 ④ 완료 표시
-        //   items[{key,SCOPE,WEB_DATA_ID,theirs,after}]
-        apply: async (dest, items, meta) => {
+        // 판정 이후 대상이 바뀐 행이 있으면 중단 (남의 변경 덮어쓰기 방지)
+        recheck: async (dest, items) => {
             const now = await $plugin.remote.readMany(dest, items);
             const moved = items.filter((it) => !merge3.same(now[it.key], it.theirs));
             if (moved.length) {
@@ -275,6 +274,36 @@ $plugin = {
                 err.moved = moved;
                 throw err;
             }
+        },
+
+        // 반영 진입점: 테스트 모드(dryRun)면 SAP에 쓰지 않고 파일로 저장
+        commit: (dest, items, meta) => ($plugin.util.dryRun() ? $plugin.sync.preview(dest, items, meta) : $plugin.sync.apply(dest, items, meta)),
+
+        // 테스트 모드: 반영될 내용을 파일로만 저장 (이력 기록 없음)
+        preview: async (dest, items, meta) => {
+            await $plugin.sync.recheck(dest, items);
+            const rec = {
+                _type: 'webdataVcs-push-preview',
+                branch: meta.branch,
+                target: dest,
+                via: meta.via,
+                at: $plugin.util.now(),
+                rows: items.map((it) => ({
+                    SCOPE: it.SCOPE,
+                    WEB_DATA_ID: it.WEB_DATA_ID,
+                    op: it.after === null ? 'delete' : it.theirs === null ? 'add' : 'modify',
+                    before: it.theirs,
+                    after: it.after
+                }))
+            };
+            $plugin.util.downloadJSON('webdataVcs_' + meta.via + '_' + meta.branch + '_' + dest + '_' + $plugin.util.ts() + '.json', rec);
+            return rec;
+        },
+
+        // 반영: ① 대상이 판정 이후 바뀌었는지 재확인 ② 반영 전 값 백업(이력) ③ 쓰기 ④ 완료 표시
+        //   items[{key,SCOPE,WEB_DATA_ID,theirs,after}]
+        apply: async (dest, items, meta) => {
+            await $plugin.sync.recheck(dest, items);
             const rec = {
                 branch: meta.branch,
                 target: dest,
@@ -302,11 +331,12 @@ $plugin = {
             return {
                 moved: moved,
                 run: async () => {
-                    const rec = await $plugin.sync.apply(
+                    const rec = await $plugin.sync.commit(
                         push.target,
                         ok.map((r) => ({key: r.key, SCOPE: r.SCOPE, WEB_DATA_ID: r.WEB_DATA_ID, theirs: now[r.key], after: r.before})),
                         {branch: push.branch, via: 'revert', revertOf: push.id}
                     );
+                    if ($plugin.util.dryRun()) return rec; // 테스트 모드: 파일만 저장, 이력 안 바꿈
                     push.revertedBy = rec.id;
                     await store.pushes.put(push);
                     return rec;
@@ -569,6 +599,7 @@ $plugin = {
             const label = isPatch ? 'patch: ' + (opts.patch.branch || '?') : opts.name;
             if (!isPatch && !opts.name) return unidocuAlert('체크아웃된 브랜치가 없습니다.');
 
+            const dry = u.dryRun();
             const rows = isPatch
                 ? opts.patch.rows.map((r) => ({
                       key: u.rowKey(r.SCOPE, r.WEB_DATA_ID),
@@ -599,6 +630,9 @@ $plugin = {
 
             const $c = $(
                 '<div class="wv-pop" style="min-width:700px">' +
+                    (dry
+                        ? '<div class="wv-dry">테스트 모드 — SAP에 쓰지 않고, 반영될 내용을 파일로 저장합니다. (options.dryRun: false 로 실제 반영)</div>'
+                        : '') +
                     '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px"><b>' +
                     esc(label) +
                     '</b><i class="fa fa-arrow-right"></i>' +
@@ -607,10 +641,13 @@ $plugin = {
                     '<div class="wv-box wv-list wv-items"><div class="wv-row wv-muted" style="border-top:0">' +
                     (isPatch ? '대상 값을 조회하는 중…' : '대상을 선택하세요.') +
                     '</div></div>' +
-                    '<div class="wv-muted" style="margin-top:6px">행 클릭 → 비교 · Push 직전 대상 값을 반영 이력에 백업합니다.</div>' +
+                    '<div class="wv-muted" style="margin-top:6px">행 클릭 → 비교' +
+                    (dry ? '' : ' · Push 직전 대상 값을 반영 이력에 백업합니다.') +
+                    '</div>' +
                     '</div>'
             );
 
+            const pushLabel = dry ? '파일로 저장 (테스트)' : 'Push';
             let dest = isPatch ? cur : '';
             let items = [];
             const order = {conflict: 0, auto: 1, add: 2, modify: 3, delete: 4, same: 5};
@@ -653,7 +690,7 @@ $plugin = {
                 });
                 $c.find('.wv-items').html(html || '<div class="wv-row wv-muted" style="border-top:0">변경 없음</div>');
                 const left = st.filter((s) => s === 'conflict').length;
-                $btnPush.text(left ? 'Push (충돌 ' + left + '건 남음)' : 'Push');
+                $btnPush.text(left ? pushLabel + ' (충돌 ' + left + '건 남음)' : pushLabel);
             };
 
             const runReview = async () => {
@@ -680,21 +717,14 @@ $plugin = {
                 if (!todo.length) return unidocuAlert('대상과 모두 같아 반영할 변경이 없습니다.');
                 const n = {add: 0, modify: 0, delete: 0, auto: 0};
                 todo.forEach((it) => (n[$plugin.sync.state(it)] += 1));
+                const counts = '신규 ' + n.add + ' · 변경 ' + (n.modify + n.auto) + ' · 삭제 ' + n.delete;
                 unidocuConfirm(
-                    '[' +
-                        dest +
-                        ']에 ' +
-                        todo.length +
-                        '건을 반영합니다.\n신규 ' +
-                        n.add +
-                        ' · 변경 ' +
-                        (n.modify + n.auto) +
-                        ' · 삭제 ' +
-                        n.delete +
-                        '\n\n반영 직전 대상 값은 반영 이력에 백업됩니다.',
+                    dry
+                        ? '[테스트] [' + dest + ']에 반영될 ' + todo.length + '건을 파일로 저장합니다. (SAP에 쓰지 않음)\n' + counts
+                        : '[' + dest + ']에 ' + todo.length + '건을 반영합니다.\n' + counts + '\n\n반영 직전 대상 값은 반영 이력에 백업됩니다.',
                     async () => {
                         try {
-                            const rec = await $plugin.sync.apply(
+                            const rec = await $plugin.sync.commit(
                                 dest,
                                 todo.map((it) => ({
                                     key: it.key,
@@ -705,7 +735,7 @@ $plugin = {
                                 })),
                                 {branch: isPatch ? opts.patch.branch || '(patch)' : opts.name, via: isPatch ? 'patch' : 'direct'}
                             );
-                            $plugin.ui.toast('[' + dest + '] ' + rec.rows.length + '건 반영됨');
+                            $plugin.ui.toast(dry ? '[테스트] ' + rec.rows.length + '건 파일로 저장됨' : '[' + dest + '] ' + rec.rows.length + '건 반영됨');
                             $dlg.dialog('close');
                         } catch (e) {
                             if (e && e.moved) {
@@ -721,13 +751,13 @@ $plugin = {
 
             const buttons = [];
             if (!isPatch && u.patchEnabled()) buttons.push({text: 'Patch로 내보내기', onClick: () => $plugin.sync.exportPatch(opts.name)});
-            buttons.push({text: 'Push', cls: 'unidocu-button blue', onClick: doPush});
+            buttons.push({text: pushLabel, cls: 'unidocu-button blue', onClick: doPush});
             const $dlg = $plugin.ui.modal({title: isPatch ? 'Patch 반영' : 'Push', width: 780, $content: $c, buttons: buttons});
             const $btnPush = $dlg
                 .closest('.ui-dialog')
                 .find('.ui-dialog-buttonpane button')
                 .filter(function () {
-                    return $(this).text() === 'Push';
+                    return $(this).text() === pushLabel;
                 });
 
             $c.on('change', '.wv-dest', function () {
@@ -946,10 +976,14 @@ $plugin = {
                 const warn = plan.moved.length
                     ? '\n\n반영 이후 대상에서 또 바뀐 ' + plan.moved.length + '건은 건너뜁니다:\n' + plan.moved.map((m) => m.key).join('\n')
                     : '';
-                unidocuConfirm('#' + p.id + ' 반영을 되돌립니다. [' + p.target + '] ' + plan.count + '건을 반영 전 값으로 다시 씁니다.' + warn, async () => {
+                const dry = u.dryRun();
+                const msg = dry
+                    ? '[테스트] #' + p.id + ' 되돌리기로 [' + p.target + ']에 쓰일 ' + plan.count + '건을 파일로 저장합니다. (SAP에 쓰지 않음)'
+                    : '#' + p.id + ' 반영을 되돌립니다. [' + p.target + '] ' + plan.count + '건을 반영 전 값으로 다시 씁니다.';
+                unidocuConfirm(msg + warn, async () => {
                     try {
                         const rec = await plan.run();
-                        $plugin.ui.toast('#' + p.id + ' 되돌림 (' + rec.rows.length + '건)');
+                        $plugin.ui.toast(dry ? '[테스트] ' + rec.rows.length + '건 파일로 저장됨' : '#' + p.id + ' 되돌림 (' + rec.rows.length + '건)');
                         await render();
                     } catch (err) {
                         if (err && err.moved) unidocuAlert('조회 이후 대상이 또 바뀌어 중단했습니다. 다시 시도하세요.');
@@ -1005,6 +1039,7 @@ $plugin = {
                 '.wv-b-success{background:#e6f7ea;color:#2b8a3e}.wv-b-del{background:#fff0e6;color:#d9480f}.wv-b-muted{background:#f1f3f5;color:#868e96}',
                 '.wv-merge .CodeMirror{font-family:Consolas,Monaco,monospace;font-size:12px}',
                 '.wv-merge .CodeMirror-merge{border:1px solid #ddd}',
+                '.wv-dry{background:#fff9db;color:#8a6d00;border:1px solid #ffe066;border-radius:4px;padding:6px 10px;margin-bottom:8px;font-size:12px}',
                 '#wv-toast{position:fixed;left:50%;bottom:48px;transform:translateX(-50%);background:rgba(33,37,41,.92);color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;z-index:2147483647;pointer-events:none;transition:opacity .2s}'
             ].join('\n');
             $('<style id="wv-style"></style>').text(css).appendTo('head');
@@ -1017,6 +1052,8 @@ $plugin = {
         currentDest: () => (typeof staticProperties !== 'undefined' && staticProperties.destinationAlias) || '',
         // 망분리 현장용 patch(파일 내보내기/반영) 메뉴 — config options.patch === true 일 때만 노출 (기본 꺼짐)
         patchEnabled: () => ($u.plugins.getOptions(config.name) || {}).patch === true,
+        // 테스트 모드: 기본 켜짐 — options.dryRun === false 일 때만 SAP에 실제 반영 (v2 검증 기간 안전장치)
+        dryRun: () => ($u.plugins.getOptions(config.name) || {}).dryRun !== false,
         // 파일명용 타임스탬프 (yyyyMMdd_HHmmss)
         ts: () => {
             const d = new Date();

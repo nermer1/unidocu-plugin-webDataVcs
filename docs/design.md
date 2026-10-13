@@ -93,6 +93,7 @@ DB `webdataVcs` (v1)
 
 | 키 | 기본값 | 설명 |
 |---|---|---|
+| `dryRun` | `true` | 테스트 모드. SAP에 쓰지 않고 반영될 내용을 파일(`webdataVcs-push-preview`)로 저장, 이력 기록 없음. `false`여야 실제 반영 (⚠️ 릴리스 전 기본값 재결정) |
 | `patch` | `false` | 망분리 현장용. `true`면 Patch 반영 / Patch 내보내기 메뉴 노출 |
 | `captureScopes` | (전체) | 지정한 SCOPE만 브랜치에 기록 |
 
