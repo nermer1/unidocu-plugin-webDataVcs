@@ -818,12 +818,13 @@ $plugin = {
                 '<div class="wv-merge">' +
                     '<div class="wv-muted" style="margin-bottom:6px">' +
                     (conflicts.length ? '충돌 항목: <b>' + u.escapeHtml(conflicts.join(', ')) + '</b> · ' : '') +
-                    '가운데가 반영될 결과입니다. 양쪽 덩어리를 화살표로 가져오거나 직접 수정하세요. (비우면 삭제)</div>' +
+                    '가운데가 반영될 결과입니다. 충돌 지점은 <b>고치기 전(base) 값</b>으로 시작하니, 양쪽 화살표로 고르거나 직접 수정하세요. (비우면 삭제)</div>' +
                     '<div style="display:flex;font-size:12px;font-weight:bold;margin-bottom:2px"><span style="flex:1">내 값 (Yours)</span><span style="flex:1;text-align:center">결과 (편집 가능)</span><span style="flex:1;text-align:right">대상 (Theirs)</span></div>' +
                     '<div class="wv-mv"></div>' +
                     '</div>'
             );
             let mv = null;
+            const startValue = merge3.pretty($plugin.sync.after(it)); // 이미 해결했으면 그 결과에서 이어서 편집
             const apply = () => {
                 const text = mv.editor().getValue();
                 const doApply = (v) => {
@@ -833,7 +834,15 @@ $plugin = {
                 if (!text.trim()) return unidocuConfirm('결과가 비어 있습니다. 대상에서 이 행을 삭제할까요?', () => doApply(null));
                 const wasJson = [it.mine, it.theirs, it.base].some((s) => merge3.parse(s).json);
                 if (wasJson && !merge3.parse(text).json) return unidocuAlert('JSON 형식이 올바르지 않습니다.');
-                doApply(merge3.compact(text));
+                const result = merge3.compact(text);
+                // 결과가 무엇을 뜻하는지 알려주고 확인 (병합했다고 착각하고 대상 유지/미선택으로 끝나는 것 방지)
+                const confirmThen = (msg, next) => (msg ? unidocuConfirm(msg, next) : next());
+                const untouched = !it.resolution && merge3.same(result, merge3.compact(startValue)) && !merge3.same(result, it.mine);
+                confirmThen(untouched ? '충돌 지점을 아직 고르지 않았습니다. (고치기 전 값 그대로)\n이대로 적용할까요?' : '', () =>
+                    confirmThen(merge3.same(result, it.theirs) ? '결과가 대상과 같습니다. 이 행은 반영되지 않고 대상 값이 유지됩니다.\n적용할까요?' : '', () =>
+                        doApply(result)
+                    )
+                );
             };
             const $dlg = $plugin.ui.modal({
                 title: '병합 — ' + it.key,
@@ -846,7 +855,7 @@ $plugin = {
                 ]
             });
             mv = CodeMirror.MergeView($c.find('.wv-mv')[0], {
-                value: merge3.pretty($plugin.sync.after(it)), // 이미 해결했으면 그 결과에서 이어서 편집
+                value: startValue,
                 origLeft: merge3.pretty(it.mine),
                 orig: merge3.pretty(it.theirs),
                 mode: {name: 'javascript', json: true},

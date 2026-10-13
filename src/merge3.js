@@ -41,7 +41,8 @@ const eqParsed = (a, b) => {
 // 원문 의미 비교 (키 순서·공백 무시)
 const same = (a, b) => eqParsed(parse(a), parse(b));
 
-// 객체 키 단위 재귀 병합. 충돌 경로는 conflicts에 쌓고 결과엔 대상 값을 둔다(해결 전 자리표시).
+// 객체 키 단위 재귀 병합. 충돌 경로는 conflicts에 쌓고 결과엔 base 값을 둔다
+// (IntelliJ처럼 고치기 전 값에서 시작 → 양쪽 다 차이로 보여 사용자가 직접 고르게 함)
 const mergeObj = (b, m, t, path, conflicts) => {
     const out = {};
     const keys = Object.keys(t);
@@ -62,7 +63,7 @@ const mergeObj = (b, m, t, path, conflicts) => {
         else if (isObj(mv) && isObj(tv) && (bv === undefined || isObj(bv))) v = mergeObj(bv || {}, mv, tv, path.concat(k), conflicts);
         else {
             conflicts.push(path.concat(k).join('.'));
-            v = tv;
+            v = bv;
         }
         if (v !== undefined) out[k] = v;
     });
@@ -74,7 +75,7 @@ const mergeObj = (b, m, t, path, conflicts) => {
  * @return {{status:string, kind:string, result:(string|null), conflicts:string[]}}
  *   status : same(동일, 제외) | clean(그대로 반영) | auto(자동병합) | conflict(충돌)
  *   kind   : add | modify | delete — 반영 시 동작 (clean/auto 기준, conflict는 해결 후 재계산)
- *   result : 반영할 원문 (null = 삭제). conflict면 자동 병합된 부분 + 충돌 지점은 대상 값
+ *   result : 반영할 원문 (null = 삭제). conflict면 자동 병합된 부분 + 충돌 지점은 base 값 (병합 창 시작값)
  */
 const judge = (base, mine, theirs) => {
     const B = parse(base);
@@ -99,7 +100,7 @@ const judge = (base, mine, theirs) => {
         const merged = JSON.stringify(mergeObj({}, M.v, T.v, [], conflicts));
         return done(conflicts.length ? 'conflict' : 'auto', merged, conflicts);
     }
-    return done('conflict', T.absent ? null : theirs, ['*']);
+    return done('conflict', B.absent ? null : base, ['*']);
 };
 
 // 사람이 읽기 좋은 들여쓰기 (병합 화면용). 비JSON은 그대로.
