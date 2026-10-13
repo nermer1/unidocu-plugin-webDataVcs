@@ -578,7 +578,10 @@ $plugin = {
             $c.on('click', '.wv-crow', function (e) {
                 if ($(e.target).closest('.wv-c-drop').length) return;
                 const c = list.find((x) => x.key === $(this).attr('data-key'));
-                if (c) $plugin.ui.diffView('base ↔ 내 값 — ' + c.key, 'base (개발 원래 값)', c.base, '내 값', c.mine);
+                if (c)
+                    $plugin.ui.compareView('내 변경 — ' + c.key, [
+                        {label: '내 변경', leftLabel: 'base (처음 기록 시 개발 값)', left: c.base, rightLabel: '브랜치 (' + name + ')', right: c.mine}
+                    ]);
             });
             $c.on('click', '.wv-c-drop', function () {
                 const key = $(this).closest('.wv-crow').attr('data-key');
@@ -787,7 +790,16 @@ $plugin = {
             });
             $c.on('click', '.wv-irow', function () {
                 const it = itemOf(this);
-                $plugin.ui.diffView('대상 ↔ 반영 결과 — ' + it.key, '대상 (현재 ' + dest + ')', it.theirs, '반영 결과', $plugin.sync.after(it));
+                const after = $plugin.sync.after(it);
+                const views = [
+                    {label: '브랜치 ↔ 대상', leftLabel: '대상 (' + dest + ' 현재)', left: it.theirs, rightLabel: '브랜치 (' + label + ')', right: it.mine}
+                ];
+                // 자동병합·충돌 해결로 실제 반영값이 브랜치 값과 다를 때만
+                if (!merge3.same(after, it.mine))
+                    views.push({label: '반영 결과 ↔ 대상', leftLabel: '대상 (' + dest + ' 현재)', left: it.theirs, rightLabel: '반영될 값', right: after});
+                if (!it.baseUnknown)
+                    views.push({label: '내 변경', leftLabel: 'base (고치기 전)', left: it.base, rightLabel: '브랜치 (' + label + ')', right: it.mine});
+                $plugin.ui.compareView(BADGE[$plugin.sync.state(it)][0] + ' — ' + it.key, views);
             });
 
             if (isPatch) runReview();
@@ -851,39 +863,82 @@ $plugin = {
             $dlg.on('dialogresize', size);
         },
 
-        // 읽기 전용 2-pane 비교 (좌 = 이전/기준, 우 = 이후). origLeft를 써야 기준이 왼쪽에 온다
-        diffView: (title, leftLabel, left, rightLabel, right) => {
+        // 읽기 전용 2-pane 비교. views 여러 개면 상단 버튼으로 전환
+        //   views[{label, leftLabel, left, rightLabel, right}] — 좌 = 기준, 우 = 비교값 (원문, null = 없음)
+        //   같은 부분은 접고(바뀐 줄 ±3줄만), 키 순서는 화면에서만 정렬해 순서 차이가 변경으로 안 보이게 함
+        compareView: (title, views) => {
             const W = Math.max(600, $(window).width() - 160);
             const H = Math.max(360, $(window).height() - 160);
             const esc = $plugin.util.escapeHtml;
             const none = ' <span class="wv-muted">(없음)</span>';
             const $c = $(
-                '<div class="wv-merge"><div style="display:flex;font-size:12px;font-weight:bold;margin-bottom:2px"><span style="flex:1">' +
-                    esc(leftLabel) +
-                    (left === null ? none : '') +
-                    '</span><span style="flex:1;text-align:right">' +
-                    esc(rightLabel) +
-                    (right === null ? none : '') +
-                    '</span></div><div class="wv-mv"></div></div>'
+                '<div class="wv-merge">' +
+                    '<div class="wv-cmp-bar">' +
+                    (views.length > 1
+                        ? views.map((v, i) => '<button class="unidocu-button wv-cmp-view" data-i="' + i + '">' + esc(v.label) + '</button>').join('')
+                        : '') +
+                    '<span class="wv-cmp-info"></span>' +
+                    '<button class="unidocu-button wv-cmp-prev">◀ 이전 변경</button><button class="unidocu-button wv-cmp-next">다음 변경 ▶</button>' +
+                    '</div>' +
+                    '<div class="wv-cmp-labels" style="display:flex;font-size:12px;font-weight:bold;margin-bottom:2px"></div>' +
+                    '<div class="wv-mv"></div></div>'
             );
             const $dlg = $plugin.ui.modal({title: title, width: W, height: H, $content: $c});
-            const mv = CodeMirror.MergeView($c.find('.wv-mv')[0], {
-                value: merge3.pretty(right),
-                origLeft: merge3.pretty(left),
-                mode: {name: 'javascript', json: true},
-                theme: 'idea',
-                lineNumbers: true,
-                readOnly: true,
-                revertButtons: false,
-                highlightDifferences: true
-            });
+            let mv = null;
+
             const size = () => {
-                const h = Math.max(260, $dlg.height() - 40);
+                if (!mv) return;
+                const h = Math.max(240, $dlg.height() - 70);
                 [mv.editor(), mv.leftOriginal()].forEach((cm) => cm && cm.setSize(null, h));
                 $c.find('.CodeMirror-merge').css('height', h + 'px');
             };
-            size();
+
+            const show = (i) => {
+                const v = views[i];
+                $c.find('.wv-cmp-view')
+                    .removeClass('wv-on')
+                    .filter('[data-i="' + i + '"]')
+                    .addClass('wv-on');
+                $c.find('.wv-cmp-labels').html(
+                    '<span style="flex:1">' +
+                        esc(v.leftLabel) +
+                        (v.left === null ? none : '') +
+                        '</span><span style="flex:1;text-align:right">' +
+                        esc(v.rightLabel) +
+                        (v.right === null ? none : '') +
+                        '</span>'
+                );
+                const $mv = $c.find('.wv-mv').empty();
+                mv = CodeMirror.MergeView($mv[0], {
+                    value: merge3.prettySorted(v.right),
+                    origLeft: merge3.prettySorted(v.left),
+                    mode: {name: 'javascript', json: true},
+                    theme: 'idea',
+                    lineNumbers: true,
+                    readOnly: true,
+                    revertButtons: false,
+                    highlightDifferences: true,
+                    collapseIdentical: 3
+                });
+                const n = (mv.leftChunks() || []).length;
+                const same = merge3.same(v.left, v.right);
+                $c.find('.wv-cmp-info').html(
+                    same
+                        ? '<b style="color:#2b8a3e">두 값이 같습니다</b>'
+                        : '변경 <b>' + n + '</b>곳 <span class="wv-muted">(같은 부분은 접힘 — 클릭하면 펼침)</span>'
+                );
+                $c.find('.wv-cmp-prev, .wv-cmp-next').toggle(!same && n > 0);
+                size();
+                if (n) mv.editor().scrollIntoView({line: mv.leftChunks()[0].editFrom, ch: 0}, 80);
+            };
+
+            $c.on('click', '.wv-cmp-view', function () {
+                show(Number($(this).attr('data-i')));
+            });
+            $c.on('click', '.wv-cmp-next', () => mv && CodeMirror.commands.goNextDiff(mv.editor()));
+            $c.on('click', '.wv-cmp-prev', () => mv && CodeMirror.commands.goPrevDiff(mv.editor()));
             $dlg.on('dialogresize', size);
+            show(0);
         },
 
         // D. 반영 이력
@@ -961,7 +1016,10 @@ $plugin = {
             $c.on('click', '.wv-prrow', function () {
                 const p = list.find((x) => x.id === open);
                 const r = p && p.rows.find((x) => x.key === $(this).attr('data-key'));
-                if (r) $plugin.ui.diffView('반영 전 ↔ 반영 값 — ' + r.key, '반영 전 (백업)', r.before, '반영 값', r.after);
+                if (r)
+                    $plugin.ui.compareView('반영 내용 — ' + r.key, [
+                        {label: '반영 내용', leftLabel: '반영 전 (백업)', left: r.before, rightLabel: '반영 값', right: r.after}
+                    ]);
             });
             $c.on('click', '.wv-p-revert', async function () {
                 const p = list.find((x) => x.id === Number($(this).closest('.wv-prow').attr('data-id')));
@@ -1039,6 +1097,8 @@ $plugin = {
                 '.wv-b-success{background:#e6f7ea;color:#2b8a3e}.wv-b-del{background:#fff0e6;color:#d9480f}.wv-b-muted{background:#f1f3f5;color:#868e96}',
                 '.wv-merge .CodeMirror{font-family:Consolas,Monaco,monospace;font-size:12px}',
                 '.wv-merge .CodeMirror-merge{border:1px solid #ddd}',
+                '.wv-cmp-bar{display:flex;align-items:center;gap:4px;margin-bottom:6px}.wv-cmp-info{flex:1;margin-left:8px;font-size:12px}',
+                '.wv-cmp-view.wv-on{background:#1971c2;color:#fff;border-color:#1971c2}',
                 '.wv-dry{background:#fff9db;color:#8a6d00;border:1px solid #ffe066;border-radius:4px;padding:6px 10px;margin-bottom:8px;font-size:12px}',
                 '#wv-toast{position:fixed;left:50%;bottom:48px;transform:translateX(-50%);background:rgba(33,37,41,.92);color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;z-index:2147483647;pointer-events:none;transition:opacity .2s}'
             ].join('\n');

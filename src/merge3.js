@@ -108,6 +108,12 @@ const pretty = (s) => {
     if (p.absent) return '';
     return p.json ? JSON.stringify(p.v, null, 2) : p.v;
 };
+// 비교 화면 전용: 키를 정렬해 들여쓰기 (순서만 다른 줄이 변경으로 보이지 않게). 저장값엔 쓰지 않음
+const prettySorted = (s) => {
+    const p = parse(s);
+    if (p.absent) return '';
+    return p.json ? JSON.stringify(canon(p.v), null, 2) : p.v;
+};
 // 화면 편집 결과 → 저장 원문 (JSON이면 압축, 비JSON은 그대로). 빈 문자열 = 삭제.
 const compact = (s) => {
     const p = parse(s);
@@ -115,4 +121,4 @@ const compact = (s) => {
     return p.json ? JSON.stringify(p.v) : p.v;
 };
 
-export default {same, judge, pretty, compact, parse};
+export default {same, judge, pretty, prettySorted, compact, parse};
