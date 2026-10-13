@@ -644,7 +644,7 @@ $plugin = {
                     '<div class="wv-box wv-list wv-items"><div class="wv-row wv-muted" style="border-top:0">' +
                     (isPatch ? '대상 값을 조회하는 중…' : '대상을 선택하세요.') +
                     '</div></div>' +
-                    '<div class="wv-muted" style="margin-top:6px">행 클릭 → 비교' +
+                    '<div class="wv-muted" style="margin-top:6px">행 클릭 → 비교 · 충돌 행 클릭 → 병합' +
                     (dry ? '' : ' · Push 직전 대상 값을 반영 이력에 백업합니다.') +
                     '</div>' +
                     '</div>'
@@ -780,16 +780,19 @@ $plugin = {
                 it.resolution = {how: 'theirs', result: it.theirs};
                 render();
             });
-            $c.on('click', '.wv-r-merge', function (e) {
-                e.stopPropagation();
-                const it = itemOf(this);
+            const openMerge = (it) =>
                 $plugin.ui.mergeWindow(it, (result) => {
                     it.resolution = {how: 'merge', result: result};
                     render();
                 });
+            $c.on('click', '.wv-r-merge', function (e) {
+                e.stopPropagation();
+                openMerge(itemOf(this));
             });
             $c.on('click', '.wv-irow', function () {
                 const it = itemOf(this);
+                // 충돌 행은 보기 전용 비교 대신 바로 병합 창 (IntelliJ Conflicts 더블클릭과 동일)
+                if (it.j.status === 'conflict') return openMerge(it);
                 const after = $plugin.sync.after(it);
                 const views = [
                     {label: '브랜치 ↔ 대상', leftLabel: '대상 (' + dest + ' 현재)', left: it.theirs, rightLabel: '브랜치 (' + label + ')', right: it.mine}
@@ -843,7 +846,7 @@ $plugin = {
                 ]
             });
             mv = CodeMirror.MergeView($c.find('.wv-mv')[0], {
-                value: merge3.pretty(it.j.result),
+                value: merge3.pretty($plugin.sync.after(it)), // 이미 해결했으면 그 결과에서 이어서 편집
                 origLeft: merge3.pretty(it.mine),
                 orig: merge3.pretty(it.theirs),
                 mode: {name: 'javascript', json: true},
