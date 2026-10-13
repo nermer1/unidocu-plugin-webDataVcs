@@ -407,7 +407,10 @@ $plugin = {
 
             const render = async () => {
                 const active = store.getActive();
-                const branches = (await store.branches.list()).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+                // 현재 세션 dest에서 만든 브랜치만 (같은 브라우저 DB를 dest끼리 공유하므로 다른 dest 것은 숨김)
+                const branches = (await store.branches.list())
+                    .filter((b) => !cur || (b.dest || '') === cur)
+                    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
                 const counts = {};
                 for (const b of branches) counts[b.name] = (await store.changes.list(b.name)).length;
 
@@ -494,7 +497,8 @@ $plugin = {
             const create = async () => {
                 const n = String($c.find('.wv-newname').val() || '').trim();
                 if (!n) return unidocuAlert('이름을 입력하세요.');
-                if (await store.branches.get(n)) return unidocuAlert('이미 있는 브랜치명입니다.');
+                const dup = await store.branches.get(n);
+                if (dup) return unidocuAlert('이미 있는 브랜치명입니다.' + (dup.dest && dup.dest !== cur ? ' ([' + dup.dest + ']에서 만든 브랜치)' : ''));
                 const now = u.now();
                 await store.branches.put({name: n, dest: cur, createdAt: now, updatedAt: now});
                 store.setActive(n);
