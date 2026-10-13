@@ -78,7 +78,7 @@ $plugin = {
         known: {branch: '', dest: '', keys: {}},
 
         load: async () => {
-            const name = store.getActive();
+            const name = $plugin.util.getActive();
             const k = {branch: '', dest: '', keys: {}};
             if (name) {
                 const b = await store.branches.get(name);
@@ -87,7 +87,7 @@ $plugin = {
                     k.dest = b.dest || '';
                     (await store.changes.list(name)).forEach((c) => (k.keys[c.key] = true));
                 } else {
-                    store.setActive(''); // 지워진 브랜치를 가리키면 해제
+                    $plugin.util.setActive(''); // 지워진 브랜치를 가리키면 해제
                 }
             }
             $plugin.capture.known = k;
@@ -103,7 +103,7 @@ $plugin = {
         // fn  : 'createOrModifySingle'|'createOrModify'|'createOrModifyByList'|'deleteByList'
         // args: 원본 인자 (단건: [scope, web_data_id, data, cb] / 배치: [params, list, cb])
         record: (fn, args) => {
-            const active = store.getActive();
+            const active = $plugin.util.getActive();
             if (!active) return; // 활성 브랜치 없으면 기록 안 함 (= 현행유지)
 
             const a = Array.prototype.slice.call(args || []);
@@ -135,7 +135,7 @@ $plugin = {
             // dest 바인딩: 다른 SAP dest에서 만든 브랜치면 체크아웃 해제 (이 저장은 기록 안 함)
             const cur = $plugin.util.currentDest();
             if (loaded && known.dest && cur && known.dest !== cur) {
-                store.setActive('');
+                $plugin.util.setActive('');
                 $plugin.capture.load();
                 unidocuAlert(
                     '브랜치 "' +
@@ -396,7 +396,7 @@ $plugin = {
             const known = await $plugin.capture.load();
             const cur = u.currentDest();
             if (known.branch && known.dest && cur && known.dest !== cur) {
-                store.setActive('');
+                $plugin.util.setActive('');
                 await $plugin.capture.load();
                 unidocuAlert('브랜치 "' + known.branch + '"는 [' + known.dest + '] 기준이라 현재 세션 [' + cur + ']에서 체크아웃을 해제했습니다.');
             }
@@ -406,7 +406,7 @@ $plugin = {
             let openRow = ''; // 액션 줄이 펼쳐진 브랜치
 
             const render = async () => {
-                const active = store.getActive();
+                const active = $plugin.util.getActive();
                 // 현재 세션 dest에서 만든 브랜치만 (같은 브라우저 DB를 dest끼리 공유하므로 다른 dest 것은 숨김)
                 const branches = (await store.branches.list())
                     .filter((b) => !cur || (b.dest || '') === cur)
@@ -501,14 +501,14 @@ $plugin = {
                 if (dup) return unidocuAlert('이미 있는 브랜치명입니다.' + (dup.dest && dup.dest !== cur ? ' ([' + dup.dest + ']에서 만든 브랜치)' : ''));
                 const now = u.now();
                 await store.branches.put({name: n, dest: cur, createdAt: now, updatedAt: now});
-                store.setActive(n);
+                $plugin.util.setActive(n);
                 await reload('“' + n + '” 생성 · 체크아웃됨');
             };
             $c.on('click', '.wv-create', create);
             $c.on('keydown', '.wv-newname', (e) => {
                 if (e.keyCode === 13) create();
             });
-            $c.on('click', '.wv-push:not(.wv-disabled)', () => $plugin.ui.pushDialog({source: 'branch', name: store.getActive()}));
+            $c.on('click', '.wv-push:not(.wv-disabled)', () => $plugin.ui.pushDialog({source: 'branch', name: $plugin.util.getActive()}));
             $c.on('click', '.wv-import', () => $plugin.sync.importPatch());
             $c.on('click', '.wv-history', () => $plugin.ui.historyDialog());
             $c.on('click', '.wv-brow', async function () {
@@ -518,11 +518,11 @@ $plugin = {
             });
             $c.on('click', '.wv-b-checkout', async function () {
                 const n = nameOf(this);
-                store.setActive(n);
+                $plugin.util.setActive(n);
                 await reload('“' + n + '” 체크아웃됨');
             });
             $c.on('click', '.wv-b-uncheckout', async () => {
-                store.setActive('');
+                $plugin.util.setActive('');
                 await reload('체크아웃 해제됨 — 저장이 브랜치에 기록되지 않습니다');
             });
             $c.on('click', '.wv-b-changes', function () {
@@ -538,7 +538,7 @@ $plugin = {
                 const n = nameOf(this);
                 unidocuConfirm('브랜치 "' + n + '"와 기록된 변경을 삭제할까요? (반영 이력은 남습니다)', async () => {
                     await store.branches.remove(n);
-                    if (store.getActive() === n) store.setActive('');
+                    if ($plugin.util.getActive() === n) $plugin.util.setActive('');
                     openRow = '';
                     await reload('“' + n + '” 삭제됨');
                 });
@@ -1126,6 +1126,9 @@ $plugin = {
         rowKey: (scope, webDataId) => String(scope) + '@' + String(webDataId),
         now: () => new Date().toISOString(),
         currentDest: () => (typeof staticProperties !== 'undefined' && staticProperties.destinationAlias) || '',
+        // 현재 세션 dest 기준 체크아웃 포인터
+        getActive: () => store.getActive($plugin.util.currentDest()),
+        setActive: (name) => store.setActive(name, $plugin.util.currentDest()),
         // 망분리 현장용 patch(파일 내보내기/반영) 메뉴 — config options.patch === true 일 때만 노출 (기본 꺼짐)
         patchEnabled: () => ($u.plugins.getOptions(config.name) || {}).patch === true,
         // 테스트 모드: 기본 켜짐 — options.dryRun === false 일 때만 SAP에 실제 반영 (v2 검증 기간 안전장치)

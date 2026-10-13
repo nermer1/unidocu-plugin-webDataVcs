@@ -12,7 +12,8 @@
 
 const DB_NAME = 'webdataVcs';
 const DB_VERSION = 1;
-const ACTIVE_KEY = 'webdataVcs.activeBranch';
+// 체크아웃 포인터는 dest별로 따로 기억 (dest를 오가도 각자 체크아웃 유지)
+const activeKey = (dest) => 'webdataVcs.activeBranch@' + (dest || '');
 
 let _dbPromise = null;
 
@@ -73,17 +74,17 @@ const getAll = (store, index, value) =>
     });
 
 export default {
-    getActive: () => {
+    getActive: (dest) => {
         try {
-            return localStorage.getItem(ACTIVE_KEY) || '';
+            return localStorage.getItem(activeKey(dest)) || '';
         } catch (e) {
             return '';
         }
     },
-    setActive: (name) => {
+    setActive: (name, dest) => {
         try {
-            if (name) localStorage.setItem(ACTIVE_KEY, name);
-            else localStorage.removeItem(ACTIVE_KEY);
+            if (name) localStorage.setItem(activeKey(dest), name);
+            else localStorage.removeItem(activeKey(dest));
         } catch (e) {}
     },
 
