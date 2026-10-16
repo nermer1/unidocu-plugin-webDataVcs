@@ -36,6 +36,8 @@ const config = {
 
 const RFC = 'ZUNIECM_WEB_DATA';
 const PATCH_TYPE = 'webdataVcs-patch';
+// 변경 보기의 [제외](브랜치 기록에서 행 빼기) 노출 여부 — 지금은 불필요해 숨김
+const SHOW_DROP = false;
 
 // 판정 → 표시 (뱃지 문구/색)
 const BADGE = {
@@ -572,7 +574,10 @@ $plugin = {
                         (c.baseUnknown ? '<span class="wv-muted">base 미확보</span>' : '') +
                         '<span class="wv-muted">' +
                         esc(u.shortDate(c.lastAt)) +
-                        '</span><button class="unidocu-button wv-c-drop" title="브랜치 기록에서만 제외 (개발 데이터는 그대로)">제외</button></div>';
+                        '</span>' +
+                        // [제외] 버튼은 당분간 숨김 (핸들러는 남겨둠 — 다시 쓸 땐 SHOW_DROP만 true로)
+                        (SHOW_DROP ? '<button class="unidocu-button wv-c-drop" title="브랜치 기록에서만 제외 (개발 데이터는 그대로)">제외</button>' : '') +
+                        '</div>';
                 });
                 if (!list.length) html += '<div class="wv-row wv-muted" style="border-top:0">기록된 변경이 없습니다.</div>';
                 html += '</div>';
