@@ -44,6 +44,7 @@ const BADGE = {
     add: ['신규', 'success'],
     modify: ['변경', 'success'],
     delete: ['삭제', 'del'],
+    keep: ['대상 유지', 'keep'],
     same: ['동일', 'muted']
 };
 
@@ -260,7 +261,8 @@ $plugin = {
         state: (it) => {
             if (it.j.status === 'conflict' && !it.resolution) return 'conflict';
             const after = $plugin.sync.after(it);
-            if (merge3.same(after, it.theirs)) return 'same';
+            // 반영해도 대상이 그대로인 행: 값이 원래 같으면 동일, 아니면 대상 유지(브랜치에서 안 바꿈 / 충돌에서 대상 선택)
+            if (merge3.same(after, it.theirs)) return merge3.same(it.mine, it.theirs) ? 'same' : 'keep';
             if (it.j.status === 'auto' && !it.resolution) return 'auto';
             return after === null ? 'delete' : it.theirs === null ? 'add' : 'modify';
         },
@@ -657,14 +659,14 @@ $plugin = {
             const pushLabel = dry ? '파일로 저장 (테스트)' : 'Push';
             let dest = isPatch ? cur : '';
             let items = [];
-            const order = {conflict: 0, auto: 1, add: 2, modify: 3, delete: 4, same: 5};
+            const order = {conflict: 0, auto: 1, add: 2, modify: 3, delete: 4, keep: 5, same: 6};
 
             const render = () => {
                 const st = items.map((it) => $plugin.sync.state(it));
                 const cnt = {};
                 st.forEach((s) => (cnt[s] = (cnt[s] || 0) + 1));
                 $c.find('.wv-sum').text(
-                    ['conflict', 'auto', 'add', 'modify', 'delete', 'same']
+                    ['conflict', 'auto', 'add', 'modify', 'delete', 'keep', 'same']
                         .filter((s) => cnt[s])
                         .map((s) => BADGE[s][0] + ' ' + cnt[s])
                         .join(' · ')
@@ -686,12 +688,13 @@ $plugin = {
                         '">' +
                         $plugin.ui.badge(x.s) +
                         '<span class="wv-mono" style="flex:1;' +
-                        (x.s === 'same' ? 'color:#999' : '') +
+                        (x.s === 'same' || x.s === 'keep' ? 'color:#999' : '') +
                         '">' +
                         esc(it.key) +
                         '</span>' +
                         res +
                         (x.s === 'auto' ? '<span class="wv-muted">양쪽 변경 합침</span>' : '') +
+                        (x.s === 'keep' && !it.resolution ? '<span class="wv-muted">브랜치에서 안 바꿈 — 대상 변경 유지</span>' : '') +
                         tools +
                         '</div>';
                 });
@@ -720,7 +723,7 @@ $plugin = {
                 const st = items.map((it) => $plugin.sync.state(it));
                 const left = st.filter((s) => s === 'conflict').length;
                 if (left) return unidocuAlert('해결하지 않은 충돌이 ' + left + '건 있습니다.');
-                const todo = items.filter((it, i) => st[i] !== 'same');
+                const todo = items.filter((it, i) => st[i] !== 'same' && st[i] !== 'keep');
                 if (!todo.length) return unidocuAlert('대상과 모두 같아 반영할 변경이 없습니다.');
                 const n = {add: 0, modify: 0, delete: 0, auto: 0};
                 todo.forEach((it) => (n[$plugin.sync.state(it)] += 1));
@@ -1117,7 +1120,9 @@ $plugin = {
                 '.wv-merge .CodeMirror-merge{border:1px solid #ddd}',
                 '.wv-merge .CodeMirror-merge-scrolllock-wrap{display:none}',
                 '.wv-cmp-bar{display:flex;align-items:center;gap:4px;margin-bottom:6px}.wv-cmp-info{flex:1;margin-left:8px;font-size:12px}',
-                '.wv-cmp-view.wv-on{background:#1971c2;color:#fff;border-color:#1971c2}',
+                // 실환경 unidocu-button이 배경을 덮어써서 채우기 대신 테두리·굵기로 선택 표시
+                '.wv-cmp-view.wv-on{border:2px solid #1971c2 !important;color:#1971c2 !important;font-weight:bold}',
+                '.wv-b-keep{background:#edf2ff;color:#5c7cfa}',
                 '.wv-dry{background:#fff9db;color:#8a6d00;border:1px solid #ffe066;border-radius:4px;padding:6px 10px;margin-bottom:8px;font-size:12px}',
                 '#wv-toast{position:fixed;left:50%;bottom:48px;transform:translateX(-50%);background:rgba(33,37,41,.92);color:#fff;padding:8px 16px;border-radius:6px;font-size:13px;z-index:2147483647;pointer-events:none;transition:opacity .2s}'
             ].join('\n');
