@@ -14,7 +14,7 @@ git의 개념을 webdata에 1:1로 대응시킨다. 용어와 흐름은 git(Inte
 | merge-base | **최초 기록 시점의 개발 원래 값** | 해당 행 첫 저장 시 1회 `selectOne`, 신규 행은 base 없음 |
 | push | **대상에 반영** | 행별 3-way 판정 → 확인 → 반영 |
 | merge conflict | **같은 항목을 양쪽이 다르게 변경** | Accept Yours / Accept Theirs / Merge (3-pane, 결과 편집 가능) |
-| format-patch / am | **patch 내보내기 / patch 반영** | 파일에 base + 내 값 포함 → 받는 쪽에서 3-way |
+| format-patch / am | **파일 내보내기 / 파일 업로드** (내부명 patch) | 파일에 base + 내 값 포함 → 받는 쪽에서 3-way |
 | revert | **반영 되돌리기** | 반영 직전 대상 값으로 역적용, 반영 이후 대상이 또 바뀌었으면 경고 |
 | pull | (범위 밖) | 운영 → 개발 동기화는 기존 compareWebData 담당 |
 
@@ -94,7 +94,7 @@ DB `webdataVcs` (v1)
 | 키 | 기본값 | 설명 |
 |---|---|---|
 | `dryRun` | `true` | 테스트 모드. SAP에 쓰지 않고 반영될 내용을 파일(`webdataVcs-push-preview`)로 저장, 이력 기록 없음. `false`여야 실제 반영 (⚠️ 릴리스 전 기본값 재결정) |
-| `patch` | `false` | 망분리 현장용. `true`면 Patch 반영 / Patch 내보내기 메뉴 노출 |
+| `patch` | `false` | 망분리 현장용. `true`면 [파일 내보내기] / [파일 업로드...] 메뉴 노출 |
 | `captureScopes` | (전체) | 지정한 SCOPE만 브랜치에 기록 |
 
 ## 6. 유지 / 추가 / 교체

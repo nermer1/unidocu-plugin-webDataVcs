@@ -300,7 +300,7 @@ $plugin = {
                     after: it.after
                 }))
             };
-            $plugin.util.downloadJSON('webdataVcs_' + meta.via + '_' + meta.branch + '_' + dest + '_' + $plugin.util.ts() + '.json', rec);
+            $plugin.util.downloadJSON('webdataVcs_preview_' + meta.via + '_' + meta.branch + '_' + dest + '_' + $plugin.util.ts() + '.json', rec);
             return rec;
         },
 
@@ -353,7 +353,7 @@ $plugin = {
             const b = await store.branches.get(name);
             const changes = await store.changes.list(name);
             if (!changes.length) return unidocuAlert('내보낼 변경이 없습니다.');
-            $plugin.util.downloadJSON('webdataVcs_' + name + '_' + $plugin.util.ts() + '.json', {
+            $plugin.util.downloadJSON('webdataVcs_export_' + name + '_' + $plugin.util.ts() + '.json', {
                 _type: PATCH_TYPE,
                 version: 1,
                 branch: name,
@@ -378,7 +378,8 @@ $plugin = {
                     } catch (e) {
                         return unidocuAlert('JSON 파일이 아닙니다.');
                     }
-                    if (!p || p._type !== PATCH_TYPE || !Array.isArray(p.rows)) return unidocuAlert('webdataVcs patch 파일이 아닙니다.');
+                    if (!p || p._type !== PATCH_TYPE || !Array.isArray(p.rows))
+                        return unidocuAlert('webdataVcs에서 내보낸 파일이 아닙니다. (테스트 결과 파일은 업로드할 수 없습니다)');
                     $plugin.ui.pushDialog({source: 'patch', patch: p});
                 };
                 reader.readAsText(f, 'utf-8');
@@ -443,7 +444,7 @@ $plugin = {
                 html +=
                     '<div class="wv-newrow" style="display:none;padding:4px 10px 8px 32px"><input class="wv-newname" placeholder="브랜치 이름" style="width:220px"> <button class="unidocu-button wv-create">생성</button></div>';
                 html += act('wv-push', 'fa-arrow-up', 'Push...' + (active ? '' : ' <span class="wv-muted">(체크아웃 필요)</span>'), !active);
-                if (u.patchEnabled()) html += act('wv-import', 'fa-sign-in', 'Patch 반영...');
+                if (u.patchEnabled()) html += act('wv-import', 'fa-upload', '파일 업로드...');
                 html += act('wv-history', 'fa-history', '반영 이력');
                 html += '<div class="wv-row wv-muted" style="font-size:11px">로컬 브랜치</div>';
                 branches.forEach((b) => {
@@ -476,7 +477,7 @@ $plugin = {
                                 : '<button class="unidocu-button wv-b-checkout">체크아웃</button>') +
                             '<button class="unidocu-button wv-b-changes">변경 보기</button>' +
                             '<button class="unidocu-button wv-b-push">Push...</button>' +
-                            (u.patchEnabled() ? '<button class="unidocu-button wv-b-patch">Patch 내보내기</button>' : '') +
+                            (u.patchEnabled() ? '<button class="unidocu-button wv-b-patch">파일 내보내기</button>' : '') +
                             '<button class="unidocu-button wv-b-del" style="color:#c92a2a">삭제</button>' +
                             '</div>';
                     }
@@ -610,7 +611,7 @@ $plugin = {
             const u = $plugin.util;
             const esc = u.escapeHtml;
             const isPatch = opts.source === 'patch';
-            const label = isPatch ? 'patch: ' + (opts.patch.branch || '?') : opts.name;
+            const label = isPatch ? '파일: ' + (opts.patch.branch || '?') : opts.name;
             if (!isPatch && !opts.name) return unidocuAlert('체크아웃된 브랜치가 없습니다.');
 
             const dry = u.dryRun();
@@ -661,7 +662,7 @@ $plugin = {
                     '</div>'
             );
 
-            const pushLabel = dry ? '파일로 저장 (테스트)' : 'Push';
+            const pushLabel = dry ? '테스트 Push (결과 파일)' : 'Push';
             let dest = isPatch ? cur : '';
             let items = [];
             const order = {conflict: 0, auto: 1, add: 2, modify: 3, delete: 4, keep: 5, same: 6};
@@ -748,7 +749,7 @@ $plugin = {
                                     theirs: it.theirs,
                                     after: $plugin.sync.after(it)
                                 })),
-                                {branch: isPatch ? opts.patch.branch || '(patch)' : opts.name, via: isPatch ? 'patch' : 'direct'}
+                                {branch: isPatch ? opts.patch.branch || '(파일)' : opts.name, via: isPatch ? 'patch' : 'direct'}
                             );
                             $plugin.ui.toast(dry ? '[테스트] ' + rec.rows.length + '건 파일로 저장됨' : '[' + dest + '] ' + rec.rows.length + '건 반영됨');
                             $dlg.dialog('close');
@@ -765,9 +766,9 @@ $plugin = {
             };
 
             const buttons = [];
-            if (!isPatch && u.patchEnabled()) buttons.push({text: 'Patch로 내보내기', onClick: () => $plugin.sync.exportPatch(opts.name)});
+            if (!isPatch && u.patchEnabled()) buttons.push({text: '파일 내보내기', onClick: () => $plugin.sync.exportPatch(opts.name)});
             buttons.push({text: pushLabel, cls: 'unidocu-button blue', onClick: doPush});
-            const $dlg = $plugin.ui.modal({title: isPatch ? 'Patch 반영' : 'Push', width: 780, $content: $c, buttons: buttons});
+            const $dlg = $plugin.ui.modal({title: isPatch ? '파일 업로드 반영' : 'Push', width: 780, $content: $c, buttons: buttons});
             const $btnPush = $dlg
                 .closest('.ui-dialog')
                 .find('.ui-dialog-buttonpane button')
@@ -981,7 +982,7 @@ $plugin = {
                 let html =
                     '<div class="wv-muted" style="margin-bottom:6px">이 브라우저에서 반영한 기록입니다. 행 클릭 → 반영된 행 목록</div><div class="wv-box wv-list">';
                 list.forEach((p) => {
-                    const via = {direct: '직접', patch: 'patch', revert: '되돌리기'}[p.via] || p.via;
+                    const via = {direct: '직접', patch: '파일', revert: '되돌리기'}[p.via] || p.via;
                     const state = !p.done
                         ? '<span style="color:#c92a2a">미완료</span>'
                         : p.revertedBy
