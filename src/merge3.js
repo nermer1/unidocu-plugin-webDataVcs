@@ -115,12 +115,36 @@ const mergeArr = (b, m, t, path, conflicts) => {
             conflicts.push(path);
             return b;
         }
+        // ID 이름 변경 감지: base 요소가 사라졌는데 같은 자리에 base에 없던 새 ID가 있으면 "이름 변경"으로 봄
+        //   양쪽이 같은 요소를 서로 다른 이름으로 바꿨으면 충돌 (둘 다 새 요소로 추가되는 것 방지)
+        const renames = (arr, am) => {
+            const map = {};
+            base.forEach((el, i) => {
+                const id = String(el[idKey]);
+                const cand = arr[i];
+                if (!hasOwn(am, '$' + id) && cand && !hasOwn(bm, '$' + cand[idKey])) map[id] = String(cand[idKey]);
+            });
+            return map;
+        };
+        const rm = renames(m, mm);
+        const rt = renames(t, tm);
+        const alias = {}; // 새 ID → base ID (이름 변경 충돌만)
+        const renameConflict = {};
+        Object.keys(rm).forEach((id) => {
+            if (rt[id] && rt[id] !== rm[id]) {
+                alias[rm[id]] = id;
+                alias[rt[id]] = id;
+                renameConflict[id] = true;
+            }
+        });
+        const norm = (list) => list.map((id) => alias[id] || id).filter((id, i, a) => a.indexOf(id) === i);
+
         const primary = mineMoved ? m : t;
         const secondary = mineMoved ? t : m;
-        const order = ids(primary);
+        const order = norm(ids(primary));
         // 다른 쪽에만 있는 요소는 그쪽에서 바로 앞 요소 뒤에 끼워 넣음
         let prev = null;
-        ids(secondary).forEach((id) => {
+        norm(ids(secondary)).forEach((id) => {
             if (order.indexOf(id) === -1) order.splice(prev === null ? 0 : order.indexOf(prev) + 1, 0, id);
             prev = id;
         });
@@ -130,7 +154,13 @@ const mergeArr = (b, m, t, path, conflicts) => {
         });
         const out = [];
         order.forEach((id) => {
-            const v = mergeValue(bm['$' + id], mm['$' + id], tm['$' + id], path.concat({k: idKey, v: id}), conflicts);
+            const p = path.concat({k: idKey, v: id});
+            if (renameConflict[id]) {
+                conflicts.push(p);
+                out.push(bm['$' + id]); // 시작값은 base 요소 (병합 창에서 한쪽 이름을 고르게)
+                return;
+            }
+            const v = mergeValue(bm['$' + id], mm['$' + id], tm['$' + id], p, conflicts);
             if (v !== undefined) out.push(v);
         });
         return out;
