@@ -67,7 +67,7 @@ DB `webdataVcs` (v1)
 | CodeMirror 5 + merge 애드온 (+ diff-match-patch) | 3-pane 충돌 해결 UI (mustacheEditor와 동일 버전) |
 
 - CodeMirror는 mustacheEditor와 중복 번들한다. 필요해지면 공용 플러그인으로 분리한다.
-- 3-way 판정·병합은 자체 구현(`src/merge3.js`, 객체 키 단위 재귀, 배열·원시값은 통째 비교). jsondiffpatch는 3-way 병합을 제공하지 않고 revert도 백업값 재기록으로 충분해 쓰지 않는다.
+- 3-way 판정·병합은 자체 구현(`src/merge3.js`, 객체는 키 단위, 배열은 요소 단위(공통 ID 필드로 짝 맞춤 → 없으면 같은 길이일 때 위치별 → 아니면 통째), 원시값은 통째 비교). jsondiffpatch는 3-way 병합을 제공하지 않고 revert도 백업값 재기록으로 충분해 쓰지 않는다.
 
 ## 4-1. base 캡처 타이밍
 
