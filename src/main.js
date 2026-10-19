@@ -753,11 +753,11 @@ $plugin = {
                 const rowHtml = (x) => {
                     const it = x.it;
                     const res = it.resolution
-                        ? '<span class="wv-muted">해결: ' + {mine: '내 것', theirs: '대상', merge: '병합'}[it.resolution.how] + '</span>'
+                        ? '<span class="wv-muted">해결: ' + {mine: '브랜치', theirs: '대상', merge: '병합'}[it.resolution.how] + '</span>'
                         : '';
                     const tools =
                         it.j.status === 'conflict'
-                            ? '<button class="unidocu-button wv-r-mine">내 것</button><button class="unidocu-button wv-r-theirs">대상</button><button class="unidocu-button wv-r-merge">병합...</button>'
+                            ? '<button class="unidocu-button wv-r-mine">브랜치</button><button class="unidocu-button wv-r-theirs">대상</button><button class="unidocu-button wv-r-merge">병합...</button>'
                             : '';
                     return (
                         '<div class="wv-row wv-act wv-irow" data-i="' +
