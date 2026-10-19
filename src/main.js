@@ -36,6 +36,8 @@ const config = {
 
 const RFC = 'ZUNIECM_WEB_DATA';
 const PATCH_TYPE = 'webdataVcs-patch';
+// 대상 조회: 한 SCOPE에 행이 이만큼 이상이면 행별 selectOne 대신 SCOPE 통째 selectList 1회
+const SCOPE_BULK = 20;
 // 변경 보기의 [제외](브랜치 기록에서 행 빼기) 노출 여부 — 지금은 불필요해 숨김
 const SHOW_DROP = false;
 
@@ -203,17 +205,63 @@ $plugin = {
                 );
             }),
 
-        // rows[{key,SCOPE,WEB_DATA_ID}] → {key: 원문|null}, 동시 6건
+        // SCOPE 통째 조회 → {WEB_DATA_ID: 원문}. 실패는 reject (코어 selectList는 실패 시 [] 를 넘겨 "전부 없음"이 되므로 직접 호출)
+        readScope: (dest, scope) =>
+            new Promise((resolve, reject) => {
+                const p = {MODE: 'selectList', SCOPE: scope};
+                if (dest) p.__DEST = dest;
+                let fin = false;
+                const timer = setTimeout(() => {
+                    if (fin) return;
+                    fin = true;
+                    reject(new Error('조회 시간 초과: ' + scope));
+                }, 60000);
+                $nst.is_data_nsReturn(
+                    RFC,
+                    p,
+                    (ns) => {
+                        if (fin) return;
+                        fin = true;
+                        clearTimeout(timer);
+                        const map = {};
+                        (ns.getTableReturn('OT_DATA') || []).forEach((r) => {
+                            if (String(r.SCOPE) === String(scope)) map[String(r.WEB_DATA_ID)] = r.DATA ? String(r.DATA) : null;
+                        });
+                        resolve(map);
+                    },
+                    (err) => {
+                        if (fin) return;
+                        fin = true;
+                        clearTimeout(timer);
+                        reject(err || new Error('조회 실패: ' + scope));
+                    }
+                );
+            }),
+
+        // rows[{key,SCOPE,WEB_DATA_ID}] → {key: 원문|null}
+        //   SCOPE별로 행이 SCOPE_BULK 이상이면 selectList 1회(통째), 적으면 selectOne을 동시 6건
         readMany: async (dest, rows) => {
             const out = {};
-            const queue = rows.slice();
+            const byScope = {};
+            rows.forEach((r) => (byScope[r.SCOPE] = byScope[r.SCOPE] || []).push(r));
+            const singles = [];
+            const bulk = Object.keys(byScope).filter((s) => {
+                if (byScope[s].length >= SCOPE_BULK) return true;
+                singles.push.apply(singles, byScope[s]);
+                return false;
+            });
+            const bulkJobs = bulk.map(async (s) => {
+                const map = await $plugin.remote.readScope(dest, s);
+                byScope[s].forEach((r) => (out[r.key] = Object.prototype.hasOwnProperty.call(map, String(r.WEB_DATA_ID)) ? map[String(r.WEB_DATA_ID)] : null));
+            });
+            const queue = singles.slice();
             const worker = async () => {
                 while (queue.length) {
                     const r = queue.shift();
                     out[r.key] = await $plugin.remote.readOne(dest, r.SCOPE, r.WEB_DATA_ID);
                 }
             };
-            await Promise.all([0, 1, 2, 3, 4, 5].map(worker));
+            await Promise.all(bulkJobs.concat([0, 1, 2, 3, 4, 5].map(worker)));
             return out;
         },
 
@@ -666,6 +714,7 @@ $plugin = {
             let dest = isPatch ? cur : '';
             let items = [];
             const order = {conflict: 0, auto: 1, add: 2, modify: 3, delete: 4, keep: 5, same: 6};
+            const open = {apply: false, idle: false}; // 접힌 묶음 펼침 상태
 
             const render = () => {
                 const st = items.map((it) => $plugin.sync.state(it));
@@ -678,8 +727,34 @@ $plugin = {
                         .join(' · ')
                 );
                 const sorted = items.map((it, i) => ({it: it, s: st[i], i: i})).sort((a, b) => order[a.s] - order[b.s]);
-                let html = '';
-                sorted.forEach((x) => {
+                // 사람이 손댈 것만 펼쳐 보여줌: 충돌(해결한 것 포함)은 한 줄씩, 나머지는 접힌 두 묶음
+                const conflictRows = sorted.filter((x) => x.it.j.status === 'conflict');
+                const applyRows = sorted.filter((x) => x.it.j.status !== 'conflict' && x.s !== 'same' && x.s !== 'keep');
+                const idleRows = sorted.filter((x) => x.it.j.status !== 'conflict' && (x.s === 'same' || x.s === 'keep'));
+                const breakdown = (rows) => {
+                    const c = {};
+                    rows.forEach((x) => (c[x.s] = (c[x.s] || 0) + 1));
+                    return Object.keys(c)
+                        .sort((a, b) => order[a] - order[b])
+                        .map((s) => BADGE[s][0] + ' ' + c[s])
+                        .join(' · ');
+                };
+                const group = (id, title, rows) =>
+                    rows.length
+                        ? '<div class="wv-row wv-act wv-grp" data-g="' +
+                          id +
+                          '"><i class="fa fa-chevron-' +
+                          (open[id] ? 'down' : 'right') +
+                          ' wv-muted" style="width:12px"></i><b>' +
+                          title +
+                          ' ' +
+                          rows.length +
+                          '건</b><span class="wv-muted">(' +
+                          breakdown(rows) +
+                          ')</span></div>' +
+                          (open[id] ? '<div class="wv-grp-body">' + rows.map(rowHtml).join('') + '</div>' : '')
+                        : '';
+                const rowHtml = (x) => {
                     const it = x.it;
                     const res = it.resolution
                         ? '<span class="wv-muted">해결: ' + {mine: '내 것', theirs: '대상', merge: '병합'}[it.resolution.how] + '</span>'
@@ -688,7 +763,7 @@ $plugin = {
                         it.j.status === 'conflict'
                             ? '<button class="unidocu-button wv-r-mine">내 것</button><button class="unidocu-button wv-r-theirs">대상</button><button class="unidocu-button wv-r-merge">병합...</button>'
                             : '';
-                    html +=
+                    return (
                         '<div class="wv-row wv-act wv-irow" data-i="' +
                         x.i +
                         '">' +
@@ -702,8 +777,10 @@ $plugin = {
                         (x.s === 'auto' ? '<span class="wv-muted">양쪽 변경 합침</span>' : '') +
                         (x.s === 'keep' && !it.resolution ? '<span class="wv-muted">브랜치에서 안 바꿈 — 대상 변경 유지</span>' : '') +
                         tools +
-                        '</div>';
-                });
+                        '</div>'
+                    );
+                };
+                const html = conflictRows.map(rowHtml).join('') + group('apply', '반영될 변경', applyRows) + group('idle', '변경 없음', idleRows);
                 $c.find('.wv-items').html(html || '<div class="wv-row wv-muted" style="border-top:0">변경 없음</div>');
                 const left = st.filter((s) => s === 'conflict').length;
                 $btnPush.text(left ? pushLabel + ' (충돌 ' + left + '건 남음)' : pushLabel);
@@ -779,6 +856,11 @@ $plugin = {
             $c.on('change', '.wv-dest', function () {
                 dest = String($(this).val() || '');
                 runReview();
+            });
+            $c.on('click', '.wv-grp', function () {
+                const g = $(this).attr('data-g');
+                open[g] = !open[g];
+                render();
             });
             const itemOf = (el) => items[Number($(el).closest('.wv-irow').attr('data-i'))];
             $c.on('click', '.wv-r-mine', function (e) {
