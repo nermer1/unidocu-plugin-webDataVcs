@@ -872,10 +872,14 @@ $plugin = {
                 render();
             });
             const openMerge = (it) =>
-                $plugin.ui.mergeWindow(it, (result) => {
-                    it.resolution = {how: 'merge', result: result};
-                    render();
-                });
+                $plugin.ui.mergeWindow(
+                    it,
+                    (result) => {
+                        it.resolution = {how: 'merge', result: result};
+                        render();
+                    },
+                    {left: '브랜치 (' + label + ')', right: '대상 (' + dest + ')'}
+                );
             $c.on('click', '.wv-r-merge', function (e) {
                 e.stopPropagation();
                 openMerge(itemOf(this));
@@ -899,9 +903,11 @@ $plugin = {
             if (isPatch) runReview();
         },
 
-        // C. 3-pane 병합 (좌 내 값 / 가운데 결과 편집 / 우 대상)
-        mergeWindow: (it, onApply) => {
+        // C. 3-pane 병합 (좌 브랜치 / 가운데 결과 편집 / 우 대상)
+        //   names: {left, right} 패널 제목 (예: "브랜치 (test)", "대상 (DS4)")
+        mergeWindow: (it, onApply, names) => {
             const u = $plugin.util;
+            const nm = names || {left: '브랜치', right: '대상'};
             const W = Math.max(600, $(window).width() - 80);
             const H = Math.max(400, $(window).height() - 90);
             const conflicts = (it.j.conflicts || []).filter((p) => p !== '*');
@@ -910,7 +916,11 @@ $plugin = {
                     '<div class="wv-muted" style="margin-bottom:6px">' +
                     (conflicts.length ? '충돌 항목: <b>' + u.escapeHtml(conflicts.join(', ')) + '</b> · ' : '') +
                     '가운데가 반영될 결과입니다. 충돌 지점은 <b>고치기 전(base) 값</b>으로 시작하니, 양쪽 화살표로 고르거나 직접 수정하세요. (비우면 삭제)</div>' +
-                    '<div style="display:flex;font-size:12px;font-weight:bold;margin-bottom:2px"><span style="flex:1">내 값 (Yours)</span><span style="flex:1;text-align:center">결과 (편집 가능)</span><span style="flex:1;text-align:right">대상 (Theirs)</span></div>' +
+                    '<div style="display:flex;font-size:12px;font-weight:bold;margin-bottom:2px"><span style="flex:1">' +
+                    u.escapeHtml(nm.left) +
+                    '</span><span style="flex:1;text-align:center">결과 (편집 가능)</span><span style="flex:1;text-align:right">' +
+                    u.escapeHtml(nm.right) +
+                    '</span></div>' +
                     '<div class="wv-mv"></div>' +
                     '</div>'
             );
@@ -930,7 +940,7 @@ $plugin = {
                 const left = merge3.unresolved(it.base, result, it.j.paths);
                 if (left.length)
                     return unidocuAlert(
-                        '아직 고르지 않은 충돌이 있습니다: ' + left.join(', ') + '\n화살표로 내 값 / 대상 중 고르거나 직접 수정하세요. (그만두려면 [취소])'
+                        '아직 고르지 않은 충돌이 있습니다: ' + left.join(', ') + '\n화살표로 브랜치 / 대상 중 고르거나 직접 수정하세요. (그만두려면 [취소])'
                     );
                 // 결과가 대상과 같으면 반영되지 않는다는 걸 알리고 확인
                 if (merge3.same(result, it.theirs))
