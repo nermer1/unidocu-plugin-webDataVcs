@@ -37,7 +37,8 @@ const config = {
 const RFC = 'ZUNIECM_WEB_DATA';
 const PATCH_TYPE = 'webdataVcs-patch';
 // 대상 조회: 한 SCOPE에 행이 이만큼 이상이면 행별 selectOne 대신 SCOPE 통째 selectList 1회
-const SCOPE_BULK = 20;
+//   (__DEST 조회는 순차라 호출 수를 줄이려고 낮게 잡음)
+const SCOPE_BULK = 10;
 // 변경 보기의 [제외](브랜치 기록에서 행 빼기) 노출 여부 — 지금은 불필요해 숨김
 const SHOW_DROP = false;
 
@@ -239,7 +240,9 @@ $plugin = {
             }),
 
         // rows[{key,SCOPE,WEB_DATA_ID}] → {key: 원문|null}
-        //   SCOPE별로 행이 SCOPE_BULK 이상이면 selectList 1회(통째), 적으면 selectOne을 동시 6건
+        //   SCOPE별로 행이 SCOPE_BULK 이상이면 selectList 1회(통째), 적으면 selectOne
+        //   ⚠️ 반드시 한 번에 하나씩: 코어 DestParameterInterceptor가 __DEST를 세션 공유 userInfo에 직접 쓰고
+        //      요청 끝에 되돌리는 구조라, 같은 세션에서 __DEST 요청이 겹치면 세션 dest가 대상 dest로 굳어버림
         readMany: async (dest, rows) => {
             const out = {};
             const byScope = {};
@@ -250,18 +253,11 @@ $plugin = {
                 singles.push.apply(singles, byScope[s]);
                 return false;
             });
-            const bulkJobs = bulk.map(async (s) => {
+            for (const s of bulk) {
                 const map = await $plugin.remote.readScope(dest, s);
                 byScope[s].forEach((r) => (out[r.key] = Object.prototype.hasOwnProperty.call(map, String(r.WEB_DATA_ID)) ? map[String(r.WEB_DATA_ID)] : null));
-            });
-            const queue = singles.slice();
-            const worker = async () => {
-                while (queue.length) {
-                    const r = queue.shift();
-                    out[r.key] = await $plugin.remote.readOne(dest, r.SCOPE, r.WEB_DATA_ID);
-                }
-            };
-            await Promise.all(bulkJobs.concat([0, 1, 2, 3, 4, 5].map(worker)));
+            }
+            for (const r of singles) out[r.key] = await $plugin.remote.readOne(dest, r.SCOPE, r.WEB_DATA_ID);
             return out;
         },
 
