@@ -743,9 +743,12 @@ $plugin = {
                 );
                 const sorted = items.map((it, i) => ({it: it, s: st[i], i: i})).sort((a, b) => order[a.s] - order[b.s]);
                 // 사람이 손댈 것만 펼쳐 보여줌: 충돌(해결한 것 포함)은 한 줄씩, 나머지는 접힌 두 묶음
+                // "대상 유지" 후보(브랜치는 안 바꿨는데 대상이 달라진 행)도 펼쳐서 [브랜치로 덮어쓰기]를 고를 수 있게 함
+                const isKeep = (it) => it.j.status === 'same' && !merge3.same(it.mine, it.theirs);
                 const conflictRows = sorted.filter((x) => x.it.j.status === 'conflict');
-                const applyRows = sorted.filter((x) => x.it.j.status !== 'conflict' && x.s !== 'same' && x.s !== 'keep');
-                const idleRows = sorted.filter((x) => x.it.j.status !== 'conflict' && (x.s === 'same' || x.s === 'keep'));
+                const keepRows = sorted.filter((x) => isKeep(x.it));
+                const applyRows = sorted.filter((x) => x.it.j.status !== 'conflict' && !isKeep(x.it) && x.s !== 'same' && x.s !== 'keep');
+                const idleRows = sorted.filter((x) => x.it.j.status !== 'conflict' && !isKeep(x.it) && (x.s === 'same' || x.s === 'keep'));
                 const breakdown = (rows) => {
                     const c = {};
                     rows.forEach((x) => (c[x.s] = (c[x.s] || 0) + 1));
@@ -777,7 +780,11 @@ $plugin = {
                     const tools =
                         it.j.status === 'conflict'
                             ? '<button class="unidocu-button wv-r-mine">브랜치</button><button class="unidocu-button wv-r-theirs">대상</button><button class="unidocu-button wv-r-merge">병합...</button>'
-                            : '';
+                            : isKeep(it)
+                              ? it.resolution
+                                  ? '<button class="unidocu-button wv-r-unoverride">대상 유지로</button>'
+                                  : '<button class="unidocu-button wv-r-override">브랜치로 덮어쓰기</button>'
+                              : '';
                     return (
                         '<div class="wv-row wv-act wv-irow" data-i="' +
                         x.i +
@@ -799,7 +806,11 @@ $plugin = {
                         '</div>'
                     );
                 };
-                const html = conflictRows.map(rowHtml).join('') + group('apply', '반영될 변경', applyRows) + group('idle', '변경 없음', idleRows);
+                const html =
+                    conflictRows.map(rowHtml).join('') +
+                    keepRows.map(rowHtml).join('') +
+                    group('apply', '반영될 변경', applyRows) +
+                    group('idle', '변경 없음', idleRows);
                 $c.find('.wv-items').html(html || '<div class="wv-row wv-muted" style="border-top:0">변경 없음</div>');
                 const left = st.filter((s) => s === 'conflict').length;
                 $btnPush.text(left ? pushLabel + ' (충돌 ' + left + '건 남음)' : pushLabel);
@@ -886,6 +897,18 @@ $plugin = {
                 e.stopPropagation();
                 const it = itemOf(this);
                 it.resolution = {how: 'mine', result: it.mine};
+                render();
+            });
+            // 대상 유지 행: 대상에서 바뀐 값을 브랜치 값으로 덮어쓸지 선택 (기본은 대상 유지)
+            $c.on('click', '.wv-r-override', function (e) {
+                e.stopPropagation();
+                const it = itemOf(this);
+                it.resolution = {how: 'mine', result: it.mine};
+                render();
+            });
+            $c.on('click', '.wv-r-unoverride', function (e) {
+                e.stopPropagation();
+                itemOf(this).resolution = null;
                 render();
             });
             $c.on('click', '.wv-r-theirs', function (e) {
