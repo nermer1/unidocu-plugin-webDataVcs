@@ -6,7 +6,12 @@
  *   mine   : 브랜치 최종 값
  *   theirs : 대상 dest 현재 값
  *
- * DATA가 JSON 객체면 키 단위로 재귀 병합하고, 배열·원시값·비JSON은 통째로 비교한다.
+ * DATA가 JSON이면 객체는 키 단위, 배열은 요소 단위로 재귀 병합한다.
+ *   배열: 요소들에 공통 ID 필드(COLUMN_ID·BUTTON_ID 등)가 있으면 ID로 짝을 맞추고,
+ *         없으면 세 쪽 길이가 같을 때 같은 위치끼리, 둘 다 아니면 통째로 비교한다.
+ * 원시값·비JSON은 통째로 비교한다.
+ *
+ * 경로(path) 요소: 문자열 = 객체 키 / 숫자 = 배열 위치 / {k, v} = 배열에서 k 필드가 v인 요소
  */
 
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
@@ -41,8 +46,19 @@ const eqParsed = (a, b) => {
 // 원문 의미 비교 (키 순서·공백 무시)
 const same = (a, b) => eqParsed(parse(a), parse(b));
 
-// 객체 키 단위 재귀 병합. 충돌 경로는 conflicts에 쌓고 결과엔 base 값을 둔다
+// 값 하나 3-way 병합 (undefined = 없음). 충돌 경로는 conflicts에 쌓고 결과엔 base 값을 둔다
 // (IntelliJ처럼 고치기 전 값에서 시작 → 양쪽 다 차이로 보여 사용자가 직접 고르게 함)
+const mergeValue = (b, m, t, path, conflicts) => {
+    if (eqVal(m, t)) return m;
+    if (eqVal(b, t)) return m;
+    if (eqVal(b, m)) return t;
+    if (isObj(m) && isObj(t) && (b === undefined || isObj(b))) return mergeObj(b || {}, m, t, path, conflicts);
+    if (Array.isArray(m) && Array.isArray(t) && (b === undefined || Array.isArray(b))) return mergeArr(b, m, t, path, conflicts);
+    conflicts.push(path);
+    return b;
+};
+
+// 객체 키 단위
 const mergeObj = (b, m, t, path, conflicts) => {
     const out = {};
     const keys = Object.keys(t);
@@ -53,22 +69,80 @@ const mergeObj = (b, m, t, path, conflicts) => {
         if (keys.indexOf(k) === -1) keys.push(k);
     });
     keys.forEach((k) => {
-        const bv = hasOwn(b, k) ? b[k] : undefined;
-        const mv = hasOwn(m, k) ? m[k] : undefined;
-        const tv = hasOwn(t, k) ? t[k] : undefined;
-        let v;
-        if (eqVal(mv, tv)) v = mv;
-        else if (eqVal(bv, tv)) v = mv;
-        else if (eqVal(bv, mv)) v = tv;
-        else if (isObj(mv) && isObj(tv) && (bv === undefined || isObj(bv))) v = mergeObj(bv || {}, mv, tv, path.concat(k), conflicts);
-        else {
-            conflicts.push(path.concat(k));
-            v = bv;
-        }
+        const v = mergeValue(hasOwn(b, k) ? b[k] : undefined, hasOwn(m, k) ? m[k] : undefined, hasOwn(t, k) ? t[k] : undefined, path.concat(k), conflicts);
         if (v !== undefined) out[k] = v;
     });
     return out;
 };
+
+// 배열 요소의 ID 필드 찾기: 세 배열의 모든 요소가 객체이고, 그 필드가 원시값이며 배열 안에서 겹치지 않아야 함
+const ID_HINTS = ['COLUMN_ID', 'BUTTON_ID', 'FNAME', 'FIELD_ID', 'ID', 'KEY', 'CODE'];
+const findIdKey = (arrays) => {
+    const els = [].concat.apply([], arrays);
+    if (!els.length || !els.every(isObj)) return null;
+    const usable = (k) =>
+        arrays.every((arr) => {
+            const seen = {};
+            return arr.every((el) => {
+                const v = el[k];
+                if (v === undefined || v === null || typeof v === 'object') return false;
+                if (seen['$' + v]) return false;
+                seen['$' + v] = true;
+                return true;
+            });
+        });
+    const first = Object.keys(els[0]);
+    const cands = ID_HINTS.concat(first.filter((k) => /_ID$/.test(k) && ID_HINTS.indexOf(k) === -1));
+    for (let i = 0; i < cands.length; i++) if (usable(cands[i])) return cands[i];
+    return null;
+};
+
+// 배열 요소 단위
+const mergeArr = (b, m, t, path, conflicts) => {
+    const base = b || [];
+    const idKey = findIdKey([base, m, t]);
+    if (idKey) {
+        const ids = (arr) => arr.map((el) => String(el[idKey]));
+        const byId = (arr) => arr.reduce((o, el) => ((o['$' + el[idKey]] = el), o), {});
+        const bm = byId(base);
+        const mm = byId(m);
+        const tm = byId(t);
+        // 순서: 내 쪽만 순서를 바꿨으면 내 순서, 아니면 대상 순서. 양쪽이 다르게 바꿨으면 배열 통째 충돌
+        const common = (x, y) => ids(x).filter((id) => hasOwn(byId(y), '$' + id));
+        const mineMoved = common(m, base).join('\u0000') !== common(base, m).join('\u0000');
+        const theirsMoved = common(t, base).join('\u0000') !== common(base, t).join('\u0000');
+        if (mineMoved && theirsMoved && common(m, t).join('\u0000') !== common(t, m).join('\u0000')) {
+            conflicts.push(path);
+            return b;
+        }
+        const primary = mineMoved ? m : t;
+        const secondary = mineMoved ? t : m;
+        const order = ids(primary);
+        // 다른 쪽에만 있는 요소는 그쪽에서 바로 앞 요소 뒤에 끼워 넣음
+        let prev = null;
+        ids(secondary).forEach((id) => {
+            if (order.indexOf(id) === -1) order.splice(prev === null ? 0 : order.indexOf(prev) + 1, 0, id);
+            prev = id;
+        });
+        // base에만 있던(양쪽 다 지운) 요소는 mergeValue에서 undefined로 빠짐
+        ids(base).forEach((id) => {
+            if (order.indexOf(id) === -1) order.push(id);
+        });
+        const out = [];
+        order.forEach((id) => {
+            const v = mergeValue(bm['$' + id], mm['$' + id], tm['$' + id], path.concat({k: idKey, v: id}), conflicts);
+            if (v !== undefined) out.push(v);
+        });
+        return out;
+    }
+    // ID가 없으면 세 쪽 길이가 같을 때만 같은 위치끼리
+    if (base.length === m.length && m.length === t.length) return t.map((tv, i) => mergeValue(base[i], m[i], tv, path.concat(i), conflicts));
+    conflicts.push(path);
+    return b;
+};
+
+// 경로 → 표시 문자열 (예: OT_DATA[STBUS_NM].TEXT)
+const pathText = (p) => (p.length ? p.map((s, i) => (typeof s === 'number' ? '[' + s + ']' : isObj(s) ? '[' + s.v + ']' : (i ? '.' : '') + s)).join('') : '*');
 
 /**
  * 판정
@@ -87,7 +161,7 @@ const judge = (base, mine, theirs) => {
         status,
         kind: kindOf(result),
         result,
-        conflicts: (paths || []).map((p) => (p.length ? p.join('.') : '*')),
+        conflicts: (paths || []).map(pathText),
         paths: paths || []
     });
 
@@ -95,17 +169,14 @@ const judge = (base, mine, theirs) => {
     if (eqParsed(B, T)) return done('clean', M.absent ? null : mine);
     if (eqParsed(B, M)) return done('same', theirs); // 내 쪽 실질 변경 없음 → 대상 유지
 
-    // 셋 다 다름
-    if (!B.absent && !M.absent && !T.absent && B.json && M.json && T.json && isObj(B.v) && isObj(M.v) && isObj(T.v)) {
+    // 셋 다 다름: JSON 객체/배열이면 구조 병합 (base 없음 = 양쪽 신규도 같은 방식)
+    const structured = (v) => isObj(v) || Array.isArray(v);
+    if (!M.absent && !T.absent && M.json && T.json && structured(M.v) && structured(T.v) && (B.absent || (B.json && structured(B.v)))) {
         const conflicts = [];
-        const merged = JSON.stringify(mergeObj(B.v, M.v, T.v, [], conflicts));
-        return done(conflicts.length ? 'conflict' : 'auto', merged, conflicts);
-    }
-    // 신규 양쪽 추가(base 없음)도 객체면 키 병합
-    if (B.absent && M.json && T.json && isObj(M.v) && isObj(T.v)) {
-        const conflicts = [];
-        const merged = JSON.stringify(mergeObj({}, M.v, T.v, [], conflicts));
-        return done(conflicts.length ? 'conflict' : 'auto', merged, conflicts);
+        const merged = mergeValue(B.absent ? undefined : B.v, M.v, T.v, [], conflicts);
+        // 최상위가 통째 충돌이면 행 전체 충돌과 동일
+        if (conflicts.length === 1 && !conflicts[0].length) return done('conflict', B.absent ? null : base, [[]]);
+        return done(conflicts.length ? 'conflict' : 'auto', merged === undefined ? null : JSON.stringify(merged), conflicts);
     }
     return done('conflict', B.absent ? null : base, [[]]);
 };
@@ -122,8 +193,13 @@ const prettySorted = (s) => {
     if (p.absent) return '';
     return p.json ? JSON.stringify(canon(p.v), null, 2) : p.v;
 };
-// 경로 값 조회 (없으면 undefined)
-const getAt = (v, path) => path.reduce((o, k) => (o !== null && typeof o === 'object' && hasOwn(o, k) ? o[k] : undefined), v);
+// 경로 값 조회 (없으면 undefined). {k, v} 경로는 배열에서 해당 ID 요소를 찾음
+const getAt = (v, path) =>
+    path.reduce((o, s) => {
+        if (o === null || typeof o !== 'object') return undefined;
+        if (isObj(s)) return Array.isArray(o) ? o.filter((el) => isObj(el) && String(el[s.k]) === String(s.v))[0] : undefined;
+        return hasOwn(o, s) ? o[s] : undefined;
+    }, v);
 
 // 아직 고르지 않은 충돌 경로 — 결과가 그 지점에서 base 값 그대로면 미해결 (IntelliJ처럼 모두 골라야 적용)
 const unresolved = (base, result, paths) => {
@@ -131,8 +207,8 @@ const unresolved = (base, result, paths) => {
     const R = parse(result);
     if ((paths || []).some((p) => !p.length)) return eqParsed(B, R) ? ['*'] : [];
     if (R.absent || !R.json || (!B.absent && !B.json)) return [];
-    const bv = B.absent ? {} : B.v; // 양쪽 신규(base 없음)의 키 충돌은 "키 없음"이 시작값
-    return (paths || []).filter((p) => eqVal(getAt(bv, p), getAt(R.v, p))).map((p) => p.join('.'));
+    const bv = B.absent ? undefined : B.v; // 양쪽 신규(base 없음)의 충돌은 "없음"이 시작값
+    return (paths || []).filter((p) => eqVal(getAt(bv, p), getAt(R.v, p))).map(pathText);
 };
 
 // 화면 편집 결과 → 저장 원문 (JSON이면 압축, 비JSON은 그대로). 빈 문자열 = 삭제.
