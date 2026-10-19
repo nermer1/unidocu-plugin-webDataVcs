@@ -286,16 +286,22 @@ $plugin = {
         // 행 → 대상 기준 판정. rows[{key,SCOPE,WEB_DATA_ID,base,mine,baseUnknown}]
         //   branch: 반영 이력에서 "이 브랜치가 이 대상에 마지막으로 Push한 값"을 찾아 base로 씀 (git merge-base 이동)
         //     → Push 이후 브랜치에서 다시 바꾼 것(원복 포함)이 변경으로 잡힘. 이력이 없으면 처음 기록 base
-        review: async (dest, rows, branch) => {
+        //   fileSynced: 업로드한 파일에 담겨 온 내보낸 쪽의 대상별 마지막 Push 값 — 이 브라우저 이력과 비교해 더 최근 것을 씀
+        review: async (dest, rows, branch, fileSynced) => {
             const theirs = await $plugin.remote.readMany(dest, rows);
+            const local = (await $plugin.sync.syncedFor(branch))[dest] || {};
+            const incoming = (fileSynced && fileSynced[dest]) || {};
             const synced = {};
-            (await store.pushes.list())
-                .filter((p) => p.done && p.branch === branch && p.target === dest)
-                .sort((a, b) => a.id - b.id)
-                .forEach((p) => p.rows.forEach((row) => (synced[row.key] = row.after)));
+            Object.keys(incoming)
+                .concat(Object.keys(local))
+                .forEach((k) => {
+                    const a = local[k];
+                    const b = incoming[k];
+                    synced[k] = !a ? b : !b ? a : String(a.at) >= String(b.at) ? a : b;
+                });
             return rows.map((r0) => {
                 const fromPush = Object.prototype.hasOwnProperty.call(synced, r0.key);
-                const r = fromPush ? Object.assign({}, r0, {base: synced[r0.key], baseUnknown: false}) : r0;
+                const r = fromPush ? Object.assign({}, r0, {base: synced[r0.key].after, baseUnknown: false}) : r0;
                 const t = theirs[r.key];
                 let j;
                 if (r.baseUnknown) {
@@ -412,6 +418,19 @@ $plugin = {
             };
         },
 
+        // 이 브라우저 반영 이력에서 브랜치의 대상별 마지막 Push 값 → {target: {key: {after, at}}} (되돌리기 포함)
+        syncedFor: async (branch) => {
+            const out = {};
+            (await store.pushes.list())
+                .filter((p) => p.done && p.branch === branch)
+                .sort((a, b) => a.id - b.id)
+                .forEach((p) => {
+                    out[p.target] = out[p.target] || {};
+                    p.rows.forEach((row) => (out[p.target][row.key] = {after: row.after, at: p.at}));
+                });
+            return out;
+        },
+
         exportPatch: async (name) => {
             const b = await store.branches.get(name);
             const changes = await store.changes.list(name);
@@ -422,7 +441,9 @@ $plugin = {
                 branch: name,
                 sourceDest: (b && b.dest) || '',
                 exportedAt: $plugin.util.now(),
-                rows: changes.map((c) => ({SCOPE: c.SCOPE, WEB_DATA_ID: c.WEB_DATA_ID, base: c.base, mine: c.mine, baseUnknown: !!c.baseUnknown}))
+                rows: changes.map((c) => ({SCOPE: c.SCOPE, WEB_DATA_ID: c.WEB_DATA_ID, base: c.base, mine: c.mine, baseUnknown: !!c.baseUnknown})),
+                // 받는 쪽이 직접 Push와 같은 기준으로 판정하도록 대상별 마지막 Push 값을 같이 보냄
+                synced: await $plugin.sync.syncedFor(name)
             });
         },
 
@@ -820,7 +841,7 @@ $plugin = {
                 if (!dest) return;
                 $c.find('.wv-items').html('<div class="wv-row wv-muted" style="border-top:0">대상 값을 조회하는 중…</div>');
                 try {
-                    items = await $plugin.sync.review(dest, rows, isPatch ? opts.patch.branch || '(파일)' : opts.name);
+                    items = await $plugin.sync.review(dest, rows, isPatch ? opts.patch.branch || '(파일)' : opts.name, isPatch ? opts.patch.synced : null);
                     render();
                 } catch (e) {
                     items = [];
