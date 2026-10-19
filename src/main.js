@@ -284,9 +284,18 @@ $plugin = {
     // ────────────────────────────────────────────────────────────────────
     sync: {
         // 행 → 대상 기준 판정. rows[{key,SCOPE,WEB_DATA_ID,base,mine,baseUnknown}]
-        review: async (dest, rows) => {
+        //   branch: 반영 이력에서 "이 브랜치가 이 대상에 마지막으로 Push한 값"을 찾아 base로 씀 (git merge-base 이동)
+        //     → Push 이후 브랜치에서 다시 바꾼 것(원복 포함)이 변경으로 잡힘. 이력이 없으면 처음 기록 base
+        review: async (dest, rows, branch) => {
             const theirs = await $plugin.remote.readMany(dest, rows);
-            return rows.map((r) => {
+            const synced = {};
+            (await store.pushes.list())
+                .filter((p) => p.done && p.branch === branch && p.target === dest)
+                .sort((a, b) => a.id - b.id)
+                .forEach((p) => p.rows.forEach((row) => (synced[row.key] = row.after)));
+            return rows.map((r0) => {
+                const fromPush = Object.prototype.hasOwnProperty.call(synced, r0.key);
+                const r = fromPush ? Object.assign({}, r0, {base: synced[r0.key], baseUnknown: false}) : r0;
                 const t = theirs[r.key];
                 let j;
                 if (r.baseUnknown) {
@@ -297,7 +306,17 @@ $plugin = {
                 } else {
                     j = merge3.judge(r.base, r.mine, t);
                 }
-                return {key: r.key, SCOPE: r.SCOPE, WEB_DATA_ID: r.WEB_DATA_ID, base: r.base, mine: r.mine, theirs: t, j: j, resolution: null};
+                return {
+                    key: r.key,
+                    SCOPE: r.SCOPE,
+                    WEB_DATA_ID: r.WEB_DATA_ID,
+                    base: r.base,
+                    baseFrom: fromPush ? 'push' : 'origin',
+                    mine: r.mine,
+                    theirs: t,
+                    j: j,
+                    resolution: null
+                };
             });
         },
 
@@ -771,7 +790,11 @@ $plugin = {
                         '</span>' +
                         res +
                         (x.s === 'auto' ? '<span class="wv-muted">양쪽 변경 합침</span>' : '') +
-                        (x.s === 'keep' && !it.resolution ? '<span class="wv-muted">브랜치에서 안 바꿈 — 대상 변경 유지</span>' : '') +
+                        (x.s === 'keep' && !it.resolution
+                            ? '<span class="wv-muted">' +
+                              (it.baseFrom === 'push' ? '마지막 Push 이후 브랜치 변경 없음' : '브랜치에서 안 바꿈') +
+                              ' — 대상 변경 유지</span>'
+                            : '') +
                         tools +
                         '</div>'
                     );
@@ -786,7 +809,7 @@ $plugin = {
                 if (!dest) return;
                 $c.find('.wv-items').html('<div class="wv-row wv-muted" style="border-top:0">대상 값을 조회하는 중…</div>');
                 try {
-                    items = await $plugin.sync.review(dest, rows);
+                    items = await $plugin.sync.review(dest, rows, isPatch ? opts.patch.branch || '(파일)' : opts.name);
                     render();
                 } catch (e) {
                     items = [];
@@ -896,7 +919,13 @@ $plugin = {
                 if (!merge3.same(after, it.mine))
                     views.push({label: '반영 결과 ↔ 대상', leftLabel: '대상 (' + dest + ' 현재)', left: it.theirs, rightLabel: '반영될 값', right: after});
                 if (!it.baseUnknown)
-                    views.push({label: '내 변경', leftLabel: 'base (고치기 전)', left: it.base, rightLabel: '브랜치 (' + label + ')', right: it.mine});
+                    views.push({
+                        label: '내 변경',
+                        leftLabel: it.baseFrom === 'push' ? '기준 (마지막 ' + dest + ' Push 값)' : 'base (고치기 전)',
+                        left: it.base,
+                        rightLabel: '브랜치 (' + label + ')',
+                        right: it.mine
+                    });
                 $plugin.ui.compareView(BADGE[$plugin.sync.state(it)][0] + ' — ' + it.key, views);
             });
 
