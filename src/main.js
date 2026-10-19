@@ -904,105 +904,22 @@ $plugin = {
         },
 
         // C. 3-pane 병합 (좌 내 값 / 가운데 결과 편집 / 우 대상)
-        //   충돌은 상단 목록에서 지점마다 [내 것]/[대상]을 골라 해결 (IntelliJ >>·X 와 같은 효과)
-        //   3-pane은 보기 + 가운데 직접 수정용 — 덩어리 복사 화살표는 반대편이 남아 헷갈려서 끔
         mergeWindow: (it, onApply) => {
             const u = $plugin.util;
-            const esc = u.escapeHtml;
             const W = Math.max(600, $(window).width() - 80);
             const H = Math.max(400, $(window).height() - 90);
-            const P = (s) => merge3.parse(s);
-            const B = P(it.base);
-            const M = P(it.mine);
-            const T = P(it.theirs);
-            // 경로 위치 값 (행 전체 경로 [] 는 값 자체, 없으면 undefined)
-            const val = (p, path) => (p.absent ? undefined : !path.length ? p.v : p.json ? merge3.getAt(p.v, path) : undefined);
-            const paths = it.j.paths && it.j.paths.length ? it.j.paths : [[]];
-            const short = (v) => {
-                if (v === undefined) return '(없음)';
-                const s = JSON.stringify(v);
-                return s.length > 40 ? s.slice(0, 38) + '…' : s;
-            };
+            const conflicts = (it.j.conflicts || []).filter((p) => p !== '*');
             const $c = $(
                 '<div class="wv-merge">' +
-                    '<div class="wv-cf"></div>' +
-                    '<div class="wv-muted" style="margin:6px 0">가운데가 반영될 결과입니다. 충돌은 위 목록에서 고르고, 그 밖의 수정은 가운데에서 직접 하세요. (비우면 삭제)</div>' +
+                    '<div class="wv-muted" style="margin-bottom:6px">' +
+                    (conflicts.length ? '충돌 항목: <b>' + u.escapeHtml(conflicts.join(', ')) + '</b> · ' : '') +
+                    '가운데가 반영될 결과입니다. 충돌 지점은 <b>고치기 전(base) 값</b>으로 시작하니, 양쪽 화살표로 고르거나 직접 수정하세요. (비우면 삭제)</div>' +
                     '<div style="display:flex;font-size:12px;font-weight:bold;margin-bottom:2px"><span style="flex:1">내 값 (Yours)</span><span style="flex:1;text-align:center">결과 (편집 가능)</span><span style="flex:1;text-align:right">대상 (Theirs)</span></div>' +
                     '<div class="wv-mv"></div>' +
                     '</div>'
             );
             let mv = null;
             const startValue = merge3.pretty($plugin.sync.after(it)); // 이미 해결했으면 그 결과에서 이어서 편집
-
-            // 가운데 현재 값 기준 충돌 지점별 상태: mine | theirs | edited | open
-            const stateOf = (path) => {
-                const text = mv ? mv.editor().getValue() : startValue;
-                const R = text.trim() ? P(text) : {absent: true};
-                if (path.length && (R.absent || !R.json)) return 'open';
-                const cur = R.absent ? undefined : !path.length ? R.v : merge3.getAt(R.v, path);
-                const eq = (x, y) => (typeof x === 'string' || typeof y === 'string' ? x === y : merge3.eqVal(x, y));
-                if (eq(cur, val(M, path))) return 'mine';
-                if (eq(cur, val(T, path))) return 'theirs';
-                if (eq(cur, val(B, path))) return 'open';
-                return 'edited';
-            };
-            const renderList = () => {
-                const st = paths.map(stateOf);
-                const done = st.filter((s) => s !== 'open').length;
-                const btn = (i, s, side, label, v) =>
-                    '<button class="unidocu-button wv-cf-pick' +
-                    (s === side ? ' wv-on' : '') +
-                    '" data-i="' +
-                    i +
-                    '" data-side="' +
-                    side +
-                    '">' +
-                    label +
-                    ' <span class="wv-mono">' +
-                    esc(short(v)) +
-                    '</span></button>';
-                const rows = paths
-                    .map(
-                        (path, i) =>
-                            '<div class="wv-cf-row"><span class="wv-cf-mark">' +
-                            (st[i] === 'open' ? '●' : '<span style="color:#2b8a3e">✓</span>') +
-                            '</span><span class="wv-mono wv-cf-path">' +
-                            esc(path.length ? merge3.pathText(path) : '행 전체') +
-                            '</span>' +
-                            btn(i, st[i], 'mine', '내 것', val(M, path)) +
-                            btn(i, st[i], 'theirs', '대상', val(T, path)) +
-                            (st[i] === 'edited' ? '<span class="wv-muted">직접 수정</span>' : '') +
-                            '</div>'
-                    )
-                    .join('');
-                $c.find('.wv-cf').html(
-                    '<div class="wv-cf-head"><b>충돌 ' +
-                        paths.length +
-                        '건</b> ' +
-                        (done === paths.length ? '<span style="color:#2b8a3e">모두 해결</span>' : '<span class="wv-muted">' + done + '건 해결</span>') +
-                        '</div>' +
-                        rows
-                );
-            };
-            const pick = (i, side) => {
-                const path = paths[i];
-                const src = side === 'mine' ? M : T;
-                const ed = mv.editor();
-                const top = ed.getScrollInfo().top;
-                if (!path.length) {
-                    ed.setValue(merge3.pretty(src.absent ? null : side === 'mine' ? it.mine : it.theirs));
-                } else {
-                    const R = P(ed.getValue());
-                    if (!R.json) return unidocuAlert('가운데 결과가 JSON 형식이 아니라 적용할 수 없습니다. 먼저 형식을 바로잡으세요.');
-                    const v = val(src, path);
-                    const next = merge3.setAt(R.v, path, v === undefined ? undefined : JSON.parse(JSON.stringify(v)), src.v);
-                    if (next === null) return unidocuAlert('이 지점을 결과에 넣을 수 없습니다: ' + merge3.pathText(path));
-                    ed.setValue(JSON.stringify(next, null, 2));
-                }
-                ed.scrollTo(null, top);
-                renderList();
-            };
-
             const apply = () => {
                 const text = mv.editor().getValue();
                 const doApply = (v) => {
@@ -1017,7 +934,7 @@ $plugin = {
                 const left = merge3.unresolved(it.base, result, it.j.paths);
                 if (left.length)
                     return unidocuAlert(
-                        '아직 고르지 않은 충돌이 있습니다: ' + left.join(', ') + '\n위 목록에서 [내 것] / [대상]을 고르세요. (그만두려면 [취소])'
+                        '아직 고르지 않은 충돌이 있습니다: ' + left.join(', ') + '\n화살표로 내 값 / 대상 중 고르거나 직접 수정하세요. (그만두려면 [취소])'
                     );
                 // 결과가 대상과 같으면 반영되지 않는다는 걸 알리고 확인
                 if (merge3.same(result, it.theirs))
@@ -1041,22 +958,13 @@ $plugin = {
                 mode: {name: 'javascript', json: true},
                 theme: 'idea',
                 lineNumbers: true,
-                revertButtons: false,
+                revertButtons: true,
                 highlightDifferences: true,
                 connect: null,
                 collapseIdentical: false
             });
-            renderList();
-            let timer = null;
-            mv.editor().on('change', () => {
-                clearTimeout(timer);
-                timer = setTimeout(renderList, 200); // 직접 수정도 목록 상태에 반영
-            });
-            $c.on('click', '.wv-cf-pick', function () {
-                pick(Number($(this).attr('data-i')), $(this).attr('data-side'));
-            });
             const size = () => {
-                const h = Math.max(240, $dlg.height() - 70 - $c.find('.wv-cf').outerHeight());
+                const h = Math.max(300, $dlg.height() - 70);
                 [mv.editor(), mv.leftOriginal(), mv.rightOriginal()].forEach((cm) => cm && cm.setSize(null, h));
                 $c.find('.CodeMirror-merge').css('height', h + 'px');
             };
@@ -1299,10 +1207,6 @@ $plugin = {
                 '.wv-merge .CodeMirror{font-family:Consolas,Monaco,monospace;font-size:12px}',
                 '.wv-merge .CodeMirror-merge{border:1px solid #ddd}',
                 '.wv-merge .CodeMirror-merge-scrolllock-wrap{display:none}',
-                '.wv-cf{border:1px solid #ffc9c9;background:#fff5f5;border-radius:4px;padding:6px 10px;max-height:180px;overflow:auto}',
-                '.wv-cf-head{margin-bottom:4px;font-size:12px}.wv-cf-row{display:flex;align-items:center;gap:6px;padding:2px 0}',
-                '.wv-cf-mark{width:14px;color:#c92a2a}.wv-cf-path{flex:1;min-width:0}',
-                '.wv-cf-pick.wv-on{border:2px solid #1971c2 !important;color:#1971c2 !important;font-weight:bold}',
                 '.wv-cmp-bar{display:flex;align-items:center;gap:4px;margin-bottom:6px}.wv-cmp-info{flex:1;margin-left:8px;font-size:12px}',
                 // 실환경 unidocu-button이 배경을 덮어써서 채우기 대신 테두리·굵기로 선택 표시
                 '.wv-cmp-view.wv-on{border:2px solid #1971c2 !important;color:#1971c2 !important;font-weight:bold}',

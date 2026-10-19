@@ -201,36 +201,6 @@ const getAt = (v, path) =>
         return hasOwn(o, s) ? o[s] : undefined;
     }, v);
 
-// 경로 위치에 값 넣기 (val === undefined 면 제거). root를 직접 바꾸고 반환, 부모가 없으면 null
-//   배열 ID 요소를 새로 넣을 땐 src(값을 가져온 쪽)에서 바로 앞 요소 뒤에 끼워 넣어 순서를 맞춤
-const setAt = (root, path, val, src) => {
-    if (!path.length) return val;
-    const parent = getAt(root, path.slice(0, -1));
-    const last = path[path.length - 1];
-    if (parent === null || typeof parent !== 'object') return null;
-    if (Array.isArray(parent)) {
-        const idx = isObj(last) ? parent.findIndex((el) => isObj(el) && String(el[last.k]) === String(last.v)) : last;
-        if (val === undefined) {
-            if (idx >= 0 && idx < parent.length) parent.splice(idx, 1);
-        } else if (idx >= 0 && idx < parent.length) parent[idx] = val;
-        else if (isObj(last)) {
-            const srcArr = getAt(src, path.slice(0, -1)) || [];
-            const at = srcArr.findIndex((el) => isObj(el) && String(el[last.k]) === String(last.v));
-            let pos = 0;
-            for (let i = at - 1; i >= 0; i--) {
-                const p = parent.findIndex((el) => isObj(el) && String(el[last.k]) === String(srcArr[i][last.k]));
-                if (p >= 0) {
-                    pos = p + 1;
-                    break;
-                }
-            }
-            parent.splice(pos, 0, val);
-        } else parent.push(val);
-    } else if (val === undefined) delete parent[last];
-    else parent[last] = val;
-    return root;
-};
-
 // 아직 고르지 않은 충돌 경로 — 결과가 그 지점에서 base 값 그대로면 미해결 (IntelliJ처럼 모두 골라야 적용)
 const unresolved = (base, result, paths) => {
     const B = parse(base);
@@ -248,4 +218,4 @@ const compact = (s) => {
     return p.json ? JSON.stringify(p.v) : p.v;
 };
 
-export default {same, judge, unresolved, pretty, prettySorted, compact, parse, getAt, setAt, pathText, eqVal};
+export default {same, judge, unresolved, pretty, prettySorted, compact, parse};
