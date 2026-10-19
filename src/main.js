@@ -894,7 +894,7 @@ $plugin = {
             };
 
             const buttons = [];
-            if (!isPatch && u.patchEnabled()) buttons.push({text: '파일 내보내기', onClick: () => $plugin.sync.exportPatch(opts.name)});
+            // [파일 내보내기]는 브랜치 메뉴에만 둠 — 여기 두면 충돌 해결 결과가 파일에 담기는 걸로 오해함 (충돌은 업로드하는 쪽에서 판정·해결)
             buttons.push({text: pushLabel, cls: 'unidocu-button blue', onClick: doPush});
             const $dlg = $plugin.ui.modal({title: isPatch ? '파일 업로드 반영' : 'Push', width: 780, $content: $c, buttons: buttons});
             const $btnPush = $dlg
