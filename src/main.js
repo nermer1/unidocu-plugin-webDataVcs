@@ -1306,7 +1306,7 @@ $plugin = {
         setActive: (name) => store.setActive(name, $plugin.util.currentDest()),
         // 망분리 현장용 patch(파일 내보내기/반영) 메뉴 — config options.patch === true 일 때만 노출 (기본 꺼짐)
         patchEnabled: () => ($u.plugins.getOptions(config.name) || {}).patch === true,
-        // 테스트 모드: 기본 켜짐 — options.dryRun === false 일 때만 SAP에 실제 반영 (v2 검증 기간 안전장치)
+        // 테스트 모드: 기본 켜짐 — options.dryRun === false 일 때만 SAP에 실제 반영 (설치만으로 SAP에 쓰이지 않게 하는 안전장치, 실제 반영은 config에서 명시적으로 켬)
         dryRun: () => ($u.plugins.getOptions(config.name) || {}).dryRun !== false,
         // 파일명용 타임스탬프 (yyyyMMdd_HHmmss)
         ts: () => {
