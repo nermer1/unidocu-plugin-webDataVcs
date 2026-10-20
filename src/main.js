@@ -18,12 +18,6 @@
  *   ui       : 브랜치 팝업 · 변경 보기 · Push · 3-pane 병합 · 반영 이력
  * ============================================================================
  */
-import CodeMirror from 'codemirror';
-import 'codemirror/mode/javascript/javascript';
-import 'codemirror/addon/merge/merge';
-import 'codemirror/lib/codemirror.css';
-import 'codemirror/addon/merge/merge.css';
-import 'codemirror/theme/idea.css';
 import merge3 from './merge3';
 import store from './store';
 
@@ -55,8 +49,12 @@ const BADGE = {
 
 let $plugin;
 
+// editorCore 의 CodeMirror — 비교·병합 창에서만 씀 (init 에서 채움, 없어도 저장 기록·Push 판정은 동작)
+let CodeMirror = null;
+
 $u.plugins.addPlugin(config.name, {
     config: config,
+    requires: ['editorCore'], // 어댑터가 자동 로드 + 먼저 init (구버전 어댑터면 config에 editorCore 도 적어야 함)
     uiExtensions: {
         floatingActions: [
             {
@@ -69,6 +67,8 @@ $u.plugins.addPlugin(config.name, {
         ]
     },
     init: (pluginHandlers) => {
+        if ($u.plugins.hasPlugin('editorCore')) CodeMirror = $u.plugins.getPlugin('editorCore').CodeMirror;
+        else console.error('[webdataVcs] editorCore 플러그인이 없어 비교·병합 창을 열 수 없습니다. config.js extraPlugins 에 editorCore 를 추가하세요.');
         // 어댑터가 webData 쓰기 직전에 동기로 발사하는 훅 (플러그인이 $u.webData를 직접 patch하지 않음)
         pluginHandlers.afterWebDataWrite = (fn, args) => $plugin.capture.record(fn, args);
         $plugin.capture.load();
@@ -979,6 +979,7 @@ $plugin = {
         // C. 3-pane 병합 (좌 브랜치 / 가운데 결과 편집 / 우 대상)
         //   names: {left, right} 패널 제목 (예: "브랜치 (test)", "대상 (DS4)")
         mergeWindow: (it, onApply, names) => {
+            if (!$plugin.ui.editorReady()) return;
             const u = $plugin.util;
             const nm = names || {left: '브랜치', right: '대상'};
             const W = Math.max(600, $(window).width() - 80);
@@ -1054,7 +1055,15 @@ $plugin = {
         // 읽기 전용 2-pane 비교. views 여러 개면 상단 버튼으로 전환
         //   views[{label, leftLabel, left, rightLabel, right}] — 좌 = 기준, 우 = 비교값 (원문, null = 없음)
         //   같은 부분은 접고(바뀐 줄 ±3줄만), 키 순서는 화면에서만 정렬해 순서 차이가 변경으로 안 보이게 함
+        // 비교·병합 창은 editorCore(CodeMirror)가 있어야 열 수 있음
+        editorReady: () => {
+            if (CodeMirror) return true;
+            unidocuAlert('비교·병합 창을 열려면 editorCore 플러그인이 필요합니다.\nconfig.js extraPlugins 에 editorCore 를 추가하세요.');
+            return false;
+        },
+
         compareView: (title, views) => {
+            if (!$plugin.ui.editorReady()) return;
             const W = Math.max(600, $(window).width() - 160);
             const H = Math.max(360, $(window).height() - 160);
             const esc = $plugin.util.escapeHtml;
