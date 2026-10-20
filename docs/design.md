@@ -49,7 +49,7 @@ base(개발)  = {k1: X(동료),  k2: 원래}
 
 어댑터 `connectIndexedDB`(단일 store, 버전 고정)로는 다중 store·스키마 버전·다중 store 트랜잭션이 불가하여 플러그인이 IndexedDB를 직접 관리한다. 어댑터 헬퍼는 범용 키-값(checkpoint 등)용으로 유지.
 
-DB `webdataVcs` (v1)
+DB `webdataVcs@<사이트 키>` (v1) — 사이트 키 = 세션 dest 이름 + SAP 지문(`jco.client` 호스트/시스템번호/클라이언트). IndexedDB가 origin(프로토콜+도메인+포트) 단위라 같은 주소에서 여러 업체를 띄워도 업체(SAP 시스템)별로 DB를 분리
 
 | store | 키 | 내용 |
 |---|---|---|
@@ -57,7 +57,7 @@ DB `webdataVcs` (v1)
 | `changes` | [branch, `SCOPE@WEB_DATA_ID`] | SCOPE, WEB_DATA_ID, **base**, **mine**, op, firstAt, lastAt / 인덱스: branch |
 | `pushes` | 자동 id | branch, target dest, at, via(direct\|patch), rows[{key, before, after}] (before = 백업 겸 revert 원본) |
 
-- 활성 브랜치: localStorage (현행 유지)
+- 활성 브랜치(체크아웃): localStorage `webdataVcs.activeBranch@<사이트 키>`
 - 기존 `webdataVcsDB` 테스트 데이터는 이관하지 않는다.
 
 ## 4. 라이브러리 (플러그인 번들)

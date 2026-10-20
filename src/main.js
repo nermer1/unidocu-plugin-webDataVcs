@@ -67,6 +67,7 @@ $u.plugins.addPlugin(config.name, {
         ]
     },
     init: (pluginHandlers) => {
+        store.setSite($plugin.util.siteKey()); // 브랜치·이력 DB 를 이 SAP 시스템 전용으로
         if ($u.plugins.hasPlugin('editorCore')) CodeMirror = $u.plugins.getPlugin('editorCore').CodeMirror;
         else console.error('[webdataVcs] editorCore 플러그인이 없어 비교·병합 창을 열 수 없습니다. config.js extraPlugins 에 editorCore 를 추가하세요.');
         // 어댑터가 webData 쓰기 직전에 동기로 발사하는 훅 (플러그인이 $u.webData를 직접 patch하지 않음)
@@ -1311,8 +1312,17 @@ $plugin = {
         now: () => new Date().toISOString(),
         currentDest: () => (typeof staticProperties !== 'undefined' && staticProperties.destinationAlias) || '',
         // 현재 세션 dest 기준 체크아웃 포인터
-        getActive: () => store.getActive($plugin.util.currentDest()),
-        setActive: (name) => store.setActive(name, $plugin.util.currentDest()),
+        // 사이트 키 = dest 이름 + SAP 시스템 지문(호스트/시스템번호/클라이언트). 같은 주소에서 여러 업체를 띄워도 안 섞이게
+        //   (rfcDestination 에서 접속 식별 값만 사용 — 계정·비밀번호는 쓰지 않음)
+        siteKey: () => {
+            const rd = (typeof staticProperties !== 'undefined' && staticProperties.rfcDestination) || {};
+            const fp = [rd['jco.client.ashost'] || rd['jco.client.mshost'], rd['jco.client.sysnr'] || rd['jco.client.r3name'], rd['jco.client.client']]
+                .filter((v) => v)
+                .join('/');
+            return $plugin.util.currentDest() + (fp ? '|' + fp : '');
+        },
+        getActive: () => store.getActive($plugin.util.siteKey()),
+        setActive: (name) => store.setActive(name, $plugin.util.siteKey()),
         // 망분리 현장용 patch(파일 내보내기/반영) 메뉴 — config options.patch === true 일 때만 노출 (기본 꺼짐)
         patchEnabled: () => ($u.plugins.getOptions(config.name) || {}).patch === true,
         // 테스트 모드: 기본 켜짐 — options.dryRun === false 일 때만 SAP에 실제 반영 (설치만으로 SAP에 쓰이지 않게 하는 안전장치, 실제 반영은 config에서 명시적으로 켬)

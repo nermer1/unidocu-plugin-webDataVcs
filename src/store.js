@@ -1,5 +1,9 @@
 /**
- * webdataVcs 전용 IndexedDB 저장소 (DB 'webdataVcs')
+ * webdataVcs 전용 IndexedDB 저장소 (DB 'webdataVcs@<사이트 키>')
+ *
+ * 사이트 키 = 세션 dest 이름 + SAP 시스템 지문(호스트/시스템번호/클라이언트).
+ *   IndexedDB 는 origin(프로토콜+도메인+포트) 단위라, 같은 주소(예: localhost:8081)로 여러 업체 프로젝트를 띄우면
+ *   dest 이름(DEV 등)이 겹쳐 브랜치·이력이 섞임 → 실제 SAP 시스템 기준으로 DB 자체를 분리한다.
  *
  * 어댑터 connectIndexedDB는 단일 store·버전 고정이라 다중 store/스키마 버전/다중 store 트랜잭션이 안 돼서 직접 관리한다.
  *
@@ -10,17 +14,17 @@
  * base/mine/before/after 는 DATA 원문 문자열, null = 행 없음.
  */
 
-const DB_NAME = 'webdataVcs';
 const DB_VERSION = 1;
-// 체크아웃 포인터는 dest별로 따로 기억 (dest를 오가도 각자 체크아웃 유지)
-const activeKey = (dest) => 'webdataVcs.activeBranch@' + (dest || '');
+// 체크아웃 포인터도 사이트 키별로 따로 기억 (dest·업체를 오가도 각자 체크아웃 유지)
+const activeKey = (site) => 'webdataVcs.activeBranch@' + (site || '');
 
+let _site = '';
 let _dbPromise = null;
 
 const open = () => {
     if (_dbPromise) return _dbPromise;
     _dbPromise = new Promise((resolve, reject) => {
-        const req = indexedDB.open(DB_NAME, DB_VERSION);
+        const req = indexedDB.open('webdataVcs@' + _site, DB_VERSION);
         // 스키마 변경 시 DB_VERSION을 올리고 oldVersion 기준으로 단계별 마이그레이션 추가
         req.onupgradeneeded = (e) => {
             const db = e.target.result;
@@ -74,17 +78,23 @@ const getAll = (store, index, value) =>
     });
 
 export default {
-    getActive: (dest) => {
+    // 사이트 키 지정 (플러그인 init 에서 1회). 바뀌면 DB 연결을 새로 엶
+    setSite: (site) => {
+        if (site === _site) return;
+        _site = site || '';
+        _dbPromise = null;
+    },
+    getActive: (site) => {
         try {
-            return localStorage.getItem(activeKey(dest)) || '';
+            return localStorage.getItem(activeKey(site)) || '';
         } catch (e) {
             return '';
         }
     },
-    setActive: (name, dest) => {
+    setActive: (name, site) => {
         try {
-            if (name) localStorage.setItem(activeKey(dest), name);
-            else localStorage.removeItem(activeKey(dest));
+            if (name) localStorage.setItem(activeKey(site), name);
+            else localStorage.removeItem(activeKey(site));
         } catch (e) {}
     },
 
