@@ -22,7 +22,7 @@ import merge3 from './merge3';
 import store from './store';
 
 const config = {
-    version: '1.0.0',
+    version: '1.0.1',
     name: 'webdataVcs',
     description: 'unidocu webdata 브랜치/병합 (VCS) 플러그인',
     extraModules: []
